@@ -86,7 +86,15 @@ async function main() {
 
     const httpServer = createServer(async (req, res) => {
       if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
-        await transport.handleRequest(req, res);
+        try {
+          await transport.handleRequest(req, res);
+        } catch (err) {
+          process.stderr.write(`❌ MCP request error: ${String(err)}\n`);
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: String(err) }));
+          }
+        }
       } else if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('OK');
