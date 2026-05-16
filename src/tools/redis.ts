@@ -147,6 +147,102 @@ export const redisTools: Tool[] = [
       },
     },
   },
+  {
+    name: 'redis_incr',
+    description: 'Incrementa o valor inteiro de uma chave (cria com 0 se não existir). Útil para contadores.',
+    inputSchema: {
+      type: 'object',
+      required: ['key'],
+      properties: {
+        key: { type: 'string' },
+        by: { type: 'number', description: 'Valor a incrementar (padrão 1)' },
+      },
+    },
+  },
+  {
+    name: 'redis_rpush',
+    description: 'Insere valores no final de uma lista Redis (append). Ideal para buffers de mensagens.',
+    inputSchema: {
+      type: 'object',
+      required: ['key', 'values'],
+      properties: {
+        key: { type: 'string' },
+        values: { type: 'array', items: { type: 'string' }, description: 'Valores a inserir no fim da lista' },
+      },
+    },
+  },
+  {
+    name: 'redis_xadd',
+    description: 'Adiciona uma entrada a um Redis Stream. Cria o stream se não existir.',
+    inputSchema: {
+      type: 'object',
+      required: ['stream', 'fields'],
+      properties: {
+        stream: { type: 'string', description: 'Nome do stream (ex: events:biz_abc123)' },
+        fields: { type: 'object', description: 'Campos da entrada (chave:valor)' },
+        id: { type: 'string', description: 'ID da entrada (padrão: * para auto-gerado)' },
+        maxlen: { type: 'number', description: 'Tamanho máximo do stream (MAXLEN ~)' },
+      },
+    },
+  },
+  {
+    name: 'redis_xread',
+    description: 'Lê entradas de um ou mais Redis Streams.',
+    inputSchema: {
+      type: 'object',
+      required: ['streams'],
+      properties: {
+        streams: {
+          type: 'array',
+          description: 'Array de {key, id} onde id é o cursor (0 = desde o início, $ = apenas novos)',
+          items: { type: 'object', properties: { key: { type: 'string' }, id: { type: 'string' } } },
+        },
+        count: { type: 'number', description: 'Máximo de entradas por stream (padrão 10)' },
+      },
+    },
+  },
+  {
+    name: 'redis_xgroup_create',
+    description: 'Cria um consumer group em um Redis Stream.',
+    inputSchema: {
+      type: 'object',
+      required: ['stream', 'group'],
+      properties: {
+        stream: { type: 'string', description: 'Nome do stream' },
+        group: { type: 'string', description: 'Nome do consumer group' },
+        id: { type: 'string', description: 'ID de início: $ (apenas novos) ou 0 (todos). Padrão: $' },
+        mkstream: { type: 'boolean', description: 'Criar o stream se não existir (padrão true)' },
+      },
+    },
+  },
+  {
+    name: 'redis_xreadgroup',
+    description: 'Lê entradas de um Redis Stream como membro de um consumer group.',
+    inputSchema: {
+      type: 'object',
+      required: ['stream', 'group', 'consumer'],
+      properties: {
+        stream: { type: 'string' },
+        group: { type: 'string' },
+        consumer: { type: 'string', description: 'Nome do consumer (ex: worker_1)' },
+        count: { type: 'number', description: 'Máximo de entradas (padrão 10)' },
+        noack: { type: 'boolean', description: 'Não exigir ACK (padrão false)' },
+      },
+    },
+  },
+  {
+    name: 'redis_xack',
+    description: 'Confirma o processamento de entradas de um Redis Stream (consumer group).',
+    inputSchema: {
+      type: 'object',
+      required: ['stream', 'group', 'ids'],
+      properties: {
+        stream: { type: 'string' },
+        group: { type: 'string' },
+        ids: { type: 'array', items: { type: 'string' }, description: 'IDs das entradas a confirmar' },
+      },
+    },
+  },
 ];
 
 type Args = Record<string, unknown>;
@@ -237,6 +333,99 @@ export async function handleRedisTool(name: string, args: Args): Promise<string>
       return safeExec(async r => {
         const result = await r.expire(args.key as string, args.seconds as number);
         return { success: result === 1 };
+      });
+    }
+    case 'redis_incr': {
+      return safeExec(async r => {
+        const by = (args.by as number) ?? 1;
+        const val = by === 1
+          ? await r.incr(args.key as string)
+          : await r.incrby(args.key as string, by);
+        return { value: val };
+      });
+    }
+    case 'redis_rpush': {
+      return safeExec(async r => {
+        const values = args.values as string[];
+        const len = await r.rpush(args.key as string, ...values);
+        return { length: len };
+      });
+    }
+    case 'redis_xadd': {
+      return safeExec(async r => {
+        const id = (args.id as string) ?? '*';
+        const fields = args.fields as Record<string, unknown>;
+        const flat: string[] = [];
+        for (const [k, v] of Object.entries(fields)) flat.push(k, String(v));
+        const cmd = r.pipeline();
+        if (args.maxlen) {
+          cmd.xadd(args.stream as string, 'MAXLEN', '~', String(args.maxlen as number), id, ...flat);
+        } else {
+          cmd.xadd(args.stream as string, id, ...flat);
+        }
+        const res = await cmd.exec();
+        return { id: res?.[0]?.[1] };
+      });
+    }
+    case 'redis_xread': {
+      return safeExec(async r => {
+        const streams = args.streams as Array<{ key: string; id: string }>;
+        const keys = streams.map(s => s.key);
+        const ids = streams.map(s => s.id ?? '0');
+        const count = (args.count as number) ?? 10;
+        const res = await (r as any).xread('COUNT', count, 'STREAMS', ...keys, ...ids);
+        if (!res) return [];
+        return res.map(([stream, entries]: [string, [string, string[]][]]) => ({
+          stream,
+          entries: entries.map(([id, fields]) => {
+            const obj: Record<string, string> = {};
+            for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
+            return { id, fields: obj };
+          }),
+        }));
+      });
+    }
+    case 'redis_xgroup_create': {
+      return safeExec(async r => {
+        const id = (args.id as string) ?? '$';
+        const mkstream = (args.mkstream as boolean) !== false;
+        const cmdArgs: string[] = [args.stream as string, args.group as string, id];
+        if (mkstream) cmdArgs.push('MKSTREAM');
+        try {
+          await (r as any).xgroup('CREATE', ...cmdArgs);
+          return { created: true };
+        } catch (e: any) {
+          if (e?.message?.includes('BUSYGROUP')) return { created: false, note: 'Consumer group já existe' };
+          throw e;
+        }
+      });
+    }
+    case 'redis_xreadgroup': {
+      return safeExec(async r => {
+        const count = (args.count as number) ?? 10;
+        const noack = args.noack ? ['NOACK'] : [];
+        const res = await (r as any).xreadgroup(
+          'GROUP', args.group as string, args.consumer as string,
+          'COUNT', count,
+          ...noack,
+          'STREAMS', args.stream as string, '>'
+        );
+        if (!res) return [];
+        return res.map(([stream, entries]: [string, [string, string[]][]]): object => ({
+          stream,
+          entries: entries.map(([id, fields]: [string, string[]]) => {
+            const obj: Record<string, string> = {};
+            for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
+            return { id, fields: obj };
+          }),
+        }));
+      });
+    }
+    case 'redis_xack': {
+      return safeExec(async r => {
+        const ids = args.ids as string[];
+        const count = await (r as any).xack(args.stream as string, args.group as string, ...ids);
+        return { acknowledged: count };
       });
     }
     default:
