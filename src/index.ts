@@ -1,6 +1,8 @@
 import 'dotenv/config';
+import { createServer } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -72,28 +74,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{ conte
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 async function main() {
-  const transport = new StdioServerTransport();
+  const port = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
 
-  process.on('SIGINT', async () => {
-    await closeMongo();
-    await closeRedis();
-    process.exit(0);
-  });
-  process.on('SIGTERM', async () => {
-    await closeMongo();
-    await closeRedis();
-    process.exit(0);
-  });
+  process.on('SIGINT', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
+  process.on('SIGTERM', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
 
-  await server.connect(transport);
+  if (port) {
+    // ── Modo HTTP (Streamable HTTP transport) ──────────────────────────────
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await server.connect(transport);
 
-  // Log para stderr para não poluir o protocolo MCP no stdout
-  process.stderr.write(
-    `✅ Stack MCP iniciado — ${ALL_TOOLS.length} ferramentas disponíveis\n`
-  );
-  process.stderr.write(
-    `   n8n(${n8nTools.length}) | evolution(${evolutionTools.length}) | chatwoot(${chatwootTools.length}) | mongo(${mongodbTools.length}) | redis(${redisTools.length}) | qdrant(${qdrantTools.length}) | coolify(${coolifyTools.length})\n`
-  );
+    const httpServer = createServer(async (req, res) => {
+      if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
+        await transport.handleRequest(req, res);
+      } else if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('OK');
+      } else {
+        res.writeHead(404);
+        res.end('Not found');
+      }
+    });
+
+    httpServer.listen(port, () => {
+      process.stderr.write(`✅ Stack MCP HTTP — porta ${port} — ${ALL_TOOLS.length} ferramentas\n`);
+      process.stderr.write(
+        `   n8n(${n8nTools.length}) | evolution(${evolutionTools.length}) | chatwoot(${chatwootTools.length}) | mongo(${mongodbTools.length}) | redis(${redisTools.length}) | qdrant(${qdrantTools.length}) | coolify(${coolifyTools.length})\n`
+      );
+    });
+  } else {
+    // ── Modo stdio (padrão) ────────────────────────────────────────────────
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    process.stderr.write(`✅ Stack MCP stdio — ${ALL_TOOLS.length} ferramentas disponíveis\n`);
+    process.stderr.write(
+      `   n8n(${n8nTools.length}) | evolution(${evolutionTools.length}) | chatwoot(${chatwootTools.length}) | mongo(${mongodbTools.length}) | redis(${redisTools.length}) | qdrant(${qdrantTools.length}) | coolify(${coolifyTools.length})\n`
+    );
+  }
 }
 
 main().catch(err => {

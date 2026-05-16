@@ -36,7 +36,10 @@ RUN chown -R mcp:mcp /app
 USER mcp
 
 # ── Variáveis de ambiente (injete no Coolify em runtime) ──
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    PORT=3000
 
-# MCP usa stdio — não expõe porta HTTP
+EXPOSE 3000
+
+# MCP usa HTTP/SSE na porta 3000
 CMD ["node", "dist/index.js"]
