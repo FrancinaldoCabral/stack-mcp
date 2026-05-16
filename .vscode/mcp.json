@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "n8n-mcp": {
+      "type": "http",
+      "url": "https://workflows.vendly.chat/mcp-server/http",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjOTVmNTNmZS0zNGYyLTQ2ZWYtODZiZi1kZDFlYWE2MTQyZDYiLCJpc3MiOiJuOG4iLCJhdWQiOiJtY3Atc2VydmVyLWFwaSIsImp0aSI6IjFmOWVkMWZkLThmNzAtNGQwMi04MGQ2LWJjZjE2NThjMjgwNCIsImlhdCI6MTc3ODk1MzkyNn0.QbUXri6Uq5zc6yRj3GyPr9Ni3hzxkb8lhsKiLhCtoAw"
+      }
+    }
+  }
+}

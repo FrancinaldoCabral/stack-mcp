@@ -16,7 +16,6 @@ export const config = {
   },
   mongodb: {
     uri: process.env.MONGODB_URI ?? 'mongodb://localhost:27017',
-    defaultDb: process.env.MONGODB_DEFAULT_DB ?? 'admin',
   },
   redis: {
     url: process.env.REDIS_URL ?? 'redis://localhost:6379',

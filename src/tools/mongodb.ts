@@ -11,8 +11,8 @@ async function getClient(): Promise<MongoClient> {
   return _client;
 }
 
-function db(dbName?: string): Promise<Db> {
-  return getClient().then(c => c.db(dbName ?? config.mongodb.defaultDb));
+function db(dbName: string): Promise<Db> {
+  return getClient().then(c => c.db(dbName));
 }
 
 export const mongodbTools: Tool[] = [
@@ -26,7 +26,8 @@ export const mongodbTools: Tool[] = [
     description: 'Lista todas as collections de um database.',
     inputSchema: {
       type: 'object',
-      properties: { database: { type: 'string', description: 'Nome do database (padrão: MONGODB_DEFAULT_DB)' } },
+      required: ['database'],
+      properties: { database: { type: 'string', description: 'Nome do database' } },
     },
   },
   {
@@ -34,9 +35,9 @@ export const mongodbTools: Tool[] = [
     description: 'Busca documentos em uma collection com filtro, projeção e paginação.',
     inputSchema: {
       type: 'object',
-      required: ['collection'],
+      required: ['database', 'collection'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
         filter: { type: 'object', description: 'Filtro MongoDB (ex: {"status": "active"})' },
         projection: { type: 'object', description: 'Campos a retornar' },
@@ -51,9 +52,9 @@ export const mongodbTools: Tool[] = [
     description: 'Conta documentos em uma collection com filtro opcional.',
     inputSchema: {
       type: 'object',
-      required: ['collection'],
+      required: ['database', 'collection'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
         filter: { type: 'object' },
       },
@@ -64,9 +65,9 @@ export const mongodbTools: Tool[] = [
     description: 'Insere um ou mais documentos em uma collection.',
     inputSchema: {
       type: 'object',
-      required: ['collection', 'documents'],
+      required: ['database', 'collection', 'documents'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
         documents: {
           description: 'Documento único ou array de documentos',
@@ -80,9 +81,9 @@ export const mongodbTools: Tool[] = [
     description: 'Atualiza documentos em uma collection.',
     inputSchema: {
       type: 'object',
-      required: ['collection', 'filter', 'update'],
+      required: ['database', 'collection', 'filter', 'update'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
         filter: { type: 'object', description: 'Critério de seleção' },
         update: { type: 'object', description: 'Operação de update (ex: {"$set": {"status": "done"}})' },
@@ -96,9 +97,9 @@ export const mongodbTools: Tool[] = [
     description: 'Remove documentos de uma collection.',
     inputSchema: {
       type: 'object',
-      required: ['collection', 'filter'],
+      required: ['database', 'collection', 'filter'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
         filter: { type: 'object', description: 'Critério de seleção dos documentos a remover' },
         many: { type: 'boolean', description: 'Remover múltiplos documentos (padrão false)' },
@@ -110,9 +111,9 @@ export const mongodbTools: Tool[] = [
     description: 'Executa um pipeline de agregação MongoDB.',
     inputSchema: {
       type: 'object',
-      required: ['collection', 'pipeline'],
+      required: ['database', 'collection', 'pipeline'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
         pipeline: {
           type: 'array',
@@ -126,9 +127,9 @@ export const mongodbTools: Tool[] = [
     description: 'Cria uma nova collection em um database.',
     inputSchema: {
       type: 'object',
-      required: ['collection'],
+      required: ['database', 'collection'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
         validator: { type: 'object', description: 'Schema de validação JSON opcional' },
       },
@@ -139,10 +140,21 @@ export const mongodbTools: Tool[] = [
     description: 'Remove permanentemente uma collection e todos os seus documentos.',
     inputSchema: {
       type: 'object',
-      required: ['collection'],
+      required: ['database', 'collection'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'mongo_drop_database',
+    description: 'Remove permanentemente um database inteiro e todas as suas collections.',
+    inputSchema: {
+      type: 'object',
+      required: ['database'],
+      properties: {
+        database: { type: 'string', description: 'Nome do database a remover' },
       },
     },
   },
@@ -151,9 +163,9 @@ export const mongodbTools: Tool[] = [
     description: 'Cria um índice em uma collection.',
     inputSchema: {
       type: 'object',
-      required: ['collection', 'keys'],
+      required: ['database', 'collection', 'keys'],
       properties: {
-        database: { type: 'string' },
+        database: { type: 'string', description: 'Nome do database' },
         collection: { type: 'string' },
         keys: { type: 'object', description: 'Campos e direção do índice (ex: {"email": 1})' },
         unique: { type: 'boolean', description: 'Índice único (padrão false)' },
@@ -185,13 +197,13 @@ export async function handleMongodbTool(name: string, args: Args): Promise<strin
     }
     case 'mongo_list_collections': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         return database.listCollections().toArray();
       });
     }
     case 'mongo_find': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const col = database.collection(args.collection as string);
         const filter = (args.filter as Record<string, unknown>) ?? {};
         let cursor = col.find(filter);
@@ -204,7 +216,7 @@ export async function handleMongodbTool(name: string, args: Args): Promise<strin
     }
     case 'mongo_count': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const col = database.collection(args.collection as string);
         const count = await col.countDocuments((args.filter as Record<string, unknown>) ?? {});
         return { count };
@@ -212,7 +224,7 @@ export async function handleMongodbTool(name: string, args: Args): Promise<strin
     }
     case 'mongo_insert': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const col = database.collection(args.collection as string);
         const docs = args.documents;
         if (Array.isArray(docs)) {
@@ -223,7 +235,7 @@ export async function handleMongodbTool(name: string, args: Args): Promise<strin
     }
     case 'mongo_update': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const col = database.collection(args.collection as string);
         const filter = args.filter as Record<string, unknown>;
         const update = args.update as Record<string, unknown>;
@@ -234,7 +246,7 @@ export async function handleMongodbTool(name: string, args: Args): Promise<strin
     }
     case 'mongo_delete': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const col = database.collection(args.collection as string);
         const filter = args.filter as Record<string, unknown>;
         if (args.many) return col.deleteMany(filter);
@@ -243,14 +255,14 @@ export async function handleMongodbTool(name: string, args: Args): Promise<strin
     }
     case 'mongo_aggregate': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const col = database.collection(args.collection as string);
         return col.aggregate(args.pipeline as Record<string, unknown>[]).toArray();
       });
     }
     case 'mongo_create_collection': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const options: Record<string, unknown> = {};
         if (args.validator) options.validator = args.validator;
         await database.createCollection(args.collection as string, options);
@@ -259,14 +271,21 @@ export async function handleMongodbTool(name: string, args: Args): Promise<strin
     }
     case 'mongo_drop_collection': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const result = await database.dropCollection(args.collection as string);
         return { dropped: result };
       });
     }
+    case 'mongo_drop_database': {
+      return safeExec(async () => {
+        const database = await db(args.database as string);
+        const result = await database.dropDatabase();
+        return { dropped: result, database: args.database };
+      });
+    }
     case 'mongo_create_index': {
       return safeExec(async () => {
-        const database = await db(args.database as string | undefined);
+        const database = await db(args.database as string);
         const col = database.collection(args.collection as string);
         const indexName = await col.createIndex(args.keys as Parameters<typeof col.createIndex>[0], {
           unique: (args.unique as boolean) ?? false,
