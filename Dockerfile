@@ -35,22 +35,8 @@ COPY --from=builder /app/dist ./dist
 RUN chown -R mcp:mcp /app
 USER mcp
 
-# ── Variáveis de ambiente (sobrescreva no Coolify) ──
-ENV NODE_ENV=production \
-    N8N_URL="" \
-    N8N_API_KEY="" \
-    EVOLUTION_URL="" \
-    EVOLUTION_API_KEY="" \
-    CHATWOOT_URL="" \
-    CHATWOOT_API_KEY="" \
-    CHATWOOT_ACCOUNT_ID="1" \
-    MONGODB_URI="" \
-    MONGODB_DEFAULT_DB="admin" \
-    REDIS_URL="" \
-    QDRANT_URL="" \
-    QDRANT_API_KEY="" \
-    COOLIFY_URL="" \
-    COOLIFY_TOKEN=""
+# ── Variáveis de ambiente (injete no Coolify em runtime) ──
+ENV NODE_ENV=production
 
 # MCP usa stdio — não expõe porta HTTP
 CMD ["node", "dist/index.js"]
