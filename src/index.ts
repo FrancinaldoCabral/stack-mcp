@@ -43,34 +43,39 @@ async function routeTool(
   return `❌ Ferramenta não encontrada: ${name}`;
 }
 
-// ── Servidor MCP ────────────────────────────────────────────────────────────
-const server = new Server(
-  {
-    name: 'stack-mcp',
-    version: '1.0.0',
-  },
-  {
-    capabilities: { tools: {} },
-  }
-);
+// ── Factory: cria um Server MCP com todos os handlers ───────────────────────
+function makeMcpServer(): Server {
+  const srv = new Server(
+    { name: 'stack-mcp', version: '1.0.0' },
+    { capabilities: { tools: {} } }
+  );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: ALL_TOOLS,
-}));
+  srv.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: ALL_TOOLS,
+  }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request): Promise<{ content: CallToolResult['content'] }> => {
-  const { name, arguments: args = {} } = request.params;
-  try {
-    const text = await routeTool(name, args as Record<string, unknown>);
-    return {
-      content: [{ type: 'text', text }],
-    };
-  } catch (err) {
-    return {
-      content: [{ type: 'text', text: `❌ Erro inesperado: ${String(err)}` }],
-    };
-  }
-});
+  srv.setRequestHandler(CallToolRequestSchema, async (request): Promise<{ content: CallToolResult['content'] }> => {
+    const { name, arguments: args = {} } = request.params;
+    try {
+      const text = await routeTool(name, args as Record<string, unknown>);
+      return { content: [{ type: 'text', text }] };
+    } catch (err) {
+      return { content: [{ type: 'text', text: `❌ Erro inesperado: ${String(err)}` }] };
+    }
+  });
+
+  return srv;
+}
+
+// ── Lê o body de um IncomingMessage ─────────────────────────────────────────
+function readBody(req: import('node:http').IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 async function main() {
@@ -80,14 +85,17 @@ async function main() {
   process.on('SIGTERM', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
 
   if (port) {
-    // ── Modo HTTP (Streamable HTTP transport) ──────────────────────────────
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    await server.connect(transport);
-
+    // ── Modo HTTP: nova instância de server+transport por request (stateless) ─
     const httpServer = createServer(async (req, res) => {
       if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
+        const srv = makeMcpServer();
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         try {
-          await transport.handleRequest(req, res);
+          await srv.connect(transport);
+          const raw = await readBody(req);
+          const parsedBody = raw ? JSON.parse(raw) : undefined;
+          await transport.handleRequest(req, res, parsedBody);
+          res.on('close', () => { transport.close(); srv.close(); });
         } catch (err) {
           process.stderr.write(`❌ MCP request error: ${String(err)}\n`);
           if (!res.headersSent) {
@@ -113,7 +121,8 @@ async function main() {
   } else {
     // ── Modo stdio (padrão) ────────────────────────────────────────────────
     const transport = new StdioServerTransport();
-    await server.connect(transport);
+    const srv = makeMcpServer();
+    await srv.connect(transport);
     process.stderr.write(`✅ Stack MCP stdio — ${ALL_TOOLS.length} ferramentas disponíveis\n`);
     process.stderr.write(
       `   n8n(${n8nTools.length}) | evolution(${evolutionTools.length}) | chatwoot(${chatwootTools.length}) | mongo(${mongodbTools.length}) | redis(${redisTools.length}) | qdrant(${qdrantTools.length}) | coolify(${coolifyTools.length})\n`
