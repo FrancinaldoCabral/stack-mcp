@@ -15,7 +15,6 @@ export declare const config: {
     };
     mongodb: {
         uri: string;
-        defaultDb: string;
     };
     redis: {
         url: string;

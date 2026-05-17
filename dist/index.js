@@ -1,6 +1,8 @@
 import 'dotenv/config';
+import { createServer } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { n8nTools, handleN8nTool } from './tools/n8n.js';
 import { evolutionTools, handleEvolutionTool } from './tools/evolution.js';
@@ -37,47 +39,81 @@ async function routeTool(name, args) {
         return handleCoolifyTool(name, args);
     return `❌ Ferramenta não encontrada: ${name}`;
 }
-// ── Servidor MCP ────────────────────────────────────────────────────────────
-const server = new Server({
-    name: 'stack-mcp',
-    version: '1.0.0',
-}, {
-    capabilities: { tools: {} },
-});
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: ALL_TOOLS,
-}));
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args = {} } = request.params;
-    try {
-        const text = await routeTool(name, args);
-        return {
-            content: [{ type: 'text', text }],
-        };
-    }
-    catch (err) {
-        return {
-            content: [{ type: 'text', text: `❌ Erro inesperado: ${String(err)}` }],
-        };
-    }
-});
+// ── Factory: cria um Server MCP com todos os handlers ───────────────────────
+function makeMcpServer() {
+    const srv = new Server({ name: 'stack-mcp', version: '1.0.0' }, { capabilities: { tools: {} } });
+    srv.setRequestHandler(ListToolsRequestSchema, async () => ({
+        tools: ALL_TOOLS,
+    }));
+    srv.setRequestHandler(CallToolRequestSchema, async (request) => {
+        const { name, arguments: args = {} } = request.params;
+        try {
+            const text = await routeTool(name, args);
+            return { content: [{ type: 'text', text }] };
+        }
+        catch (err) {
+            return { content: [{ type: 'text', text: `❌ Erro inesperado: ${String(err)}` }] };
+        }
+    });
+    return srv;
+}
+// ── Lê o body de um IncomingMessage ─────────────────────────────────────────
+function readBody(req) {
+    return new Promise((resolve, reject) => {
+        let data = '';
+        req.on('data', (chunk) => { data += chunk.toString(); });
+        req.on('end', () => resolve(data));
+        req.on('error', reject);
+    });
+}
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 async function main() {
-    const transport = new StdioServerTransport();
-    process.on('SIGINT', async () => {
-        await closeMongo();
-        await closeRedis();
-        process.exit(0);
-    });
-    process.on('SIGTERM', async () => {
-        await closeMongo();
-        await closeRedis();
-        process.exit(0);
-    });
-    await server.connect(transport);
-    // Log para stderr para não poluir o protocolo MCP no stdout
-    process.stderr.write(`✅ Stack MCP iniciado — ${ALL_TOOLS.length} ferramentas disponíveis\n`);
-    process.stderr.write(`   n8n(${n8nTools.length}) | evolution(${evolutionTools.length}) | chatwoot(${chatwootTools.length}) | mongo(${mongodbTools.length}) | redis(${redisTools.length}) | qdrant(${qdrantTools.length}) | coolify(${coolifyTools.length})\n`);
+    const port = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
+    process.on('SIGINT', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
+    process.on('SIGTERM', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
+    if (port) {
+        // ── Modo HTTP: nova instância de server+transport por request (stateless) ─
+        const httpServer = createServer(async (req, res) => {
+            if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
+                const srv = makeMcpServer();
+                const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+                try {
+                    await srv.connect(transport);
+                    const raw = await readBody(req);
+                    const parsedBody = raw ? JSON.parse(raw) : undefined;
+                    await transport.handleRequest(req, res, parsedBody);
+                    res.on('close', () => { transport.close(); srv.close(); });
+                }
+                catch (err) {
+                    process.stderr.write(`❌ MCP request error: ${String(err)}\n`);
+                    if (!res.headersSent) {
+                        res.writeHead(500, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: String(err) }));
+                    }
+                }
+            }
+            else if (req.url === '/health') {
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end('OK');
+            }
+            else {
+                res.writeHead(404);
+                res.end('Not found');
+            }
+        });
+        httpServer.listen(port, () => {
+            process.stderr.write(`✅ Stack MCP HTTP — porta ${port} — ${ALL_TOOLS.length} ferramentas\n`);
+            process.stderr.write(`   n8n(${n8nTools.length}) | evolution(${evolutionTools.length}) | chatwoot(${chatwootTools.length}) | mongo(${mongodbTools.length}) | redis(${redisTools.length}) | qdrant(${qdrantTools.length}) | coolify(${coolifyTools.length})\n`);
+        });
+    }
+    else {
+        // ── Modo stdio (padrão) ────────────────────────────────────────────────
+        const transport = new StdioServerTransport();
+        const srv = makeMcpServer();
+        await srv.connect(transport);
+        process.stderr.write(`✅ Stack MCP stdio — ${ALL_TOOLS.length} ferramentas disponíveis\n`);
+        process.stderr.write(`   n8n(${n8nTools.length}) | evolution(${evolutionTools.length}) | chatwoot(${chatwootTools.length}) | mongo(${mongodbTools.length}) | redis(${redisTools.length}) | qdrant(${qdrantTools.length}) | coolify(${coolifyTools.length})\n`);
+    }
 }
 main().catch(err => {
     process.stderr.write(`❌ Falha ao iniciar MCP: ${String(err)}\n`);

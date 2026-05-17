@@ -122,7 +122,6 @@ export async function handleN8nTool(name, args) {
                 name: args.name,
                 nodes: args.nodes,
                 connections: args.connections,
-                active: args.active ?? false,
                 settings: args.settings ?? {},
             };
             const res = await safeRequest(() => http.post('/workflows', payload).then(r => r.data));

@@ -9,7 +9,7 @@ async function getClient() {
     return _client;
 }
 function db(dbName) {
-    return getClient().then(c => c.db(dbName ?? config.mongodb.defaultDb));
+    return getClient().then(c => c.db(dbName));
 }
 export const mongodbTools = [
     {
@@ -22,7 +22,8 @@ export const mongodbTools = [
         description: 'Lista todas as collections de um database.',
         inputSchema: {
             type: 'object',
-            properties: { database: { type: 'string', description: 'Nome do database (padrão: MONGODB_DEFAULT_DB)' } },
+            required: ['database'],
+            properties: { database: { type: 'string', description: 'Nome do database' } },
         },
     },
     {
@@ -30,9 +31,9 @@ export const mongodbTools = [
         description: 'Busca documentos em uma collection com filtro, projeção e paginação.',
         inputSchema: {
             type: 'object',
-            required: ['collection'],
+            required: ['database', 'collection'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
                 filter: { type: 'object', description: 'Filtro MongoDB (ex: {"status": "active"})' },
                 projection: { type: 'object', description: 'Campos a retornar' },
@@ -47,9 +48,9 @@ export const mongodbTools = [
         description: 'Conta documentos em uma collection com filtro opcional.',
         inputSchema: {
             type: 'object',
-            required: ['collection'],
+            required: ['database', 'collection'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
                 filter: { type: 'object' },
             },
@@ -60,9 +61,9 @@ export const mongodbTools = [
         description: 'Insere um ou mais documentos em uma collection.',
         inputSchema: {
             type: 'object',
-            required: ['collection', 'documents'],
+            required: ['database', 'collection', 'documents'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
                 documents: {
                     description: 'Documento único ou array de documentos',
@@ -76,9 +77,9 @@ export const mongodbTools = [
         description: 'Atualiza documentos em uma collection.',
         inputSchema: {
             type: 'object',
-            required: ['collection', 'filter', 'update'],
+            required: ['database', 'collection', 'filter', 'update'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
                 filter: { type: 'object', description: 'Critério de seleção' },
                 update: { type: 'object', description: 'Operação de update (ex: {"$set": {"status": "done"}})' },
@@ -92,9 +93,9 @@ export const mongodbTools = [
         description: 'Remove documentos de uma collection.',
         inputSchema: {
             type: 'object',
-            required: ['collection', 'filter'],
+            required: ['database', 'collection', 'filter'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
                 filter: { type: 'object', description: 'Critério de seleção dos documentos a remover' },
                 many: { type: 'boolean', description: 'Remover múltiplos documentos (padrão false)' },
@@ -106,9 +107,9 @@ export const mongodbTools = [
         description: 'Executa um pipeline de agregação MongoDB.',
         inputSchema: {
             type: 'object',
-            required: ['collection', 'pipeline'],
+            required: ['database', 'collection', 'pipeline'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
                 pipeline: {
                     type: 'array',
@@ -122,9 +123,9 @@ export const mongodbTools = [
         description: 'Cria uma nova collection em um database.',
         inputSchema: {
             type: 'object',
-            required: ['collection'],
+            required: ['database', 'collection'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
                 validator: { type: 'object', description: 'Schema de validação JSON opcional' },
             },
@@ -135,10 +136,21 @@ export const mongodbTools = [
         description: 'Remove permanentemente uma collection e todos os seus documentos.',
         inputSchema: {
             type: 'object',
-            required: ['collection'],
+            required: ['database', 'collection'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
+            },
+        },
+    },
+    {
+        name: 'mongo_drop_database',
+        description: 'Remove permanentemente um database inteiro e todas as suas collections.',
+        inputSchema: {
+            type: 'object',
+            required: ['database'],
+            properties: {
+                database: { type: 'string', description: 'Nome do database a remover' },
             },
         },
     },
@@ -147,9 +159,9 @@ export const mongodbTools = [
         description: 'Cria um índice em uma collection.',
         inputSchema: {
             type: 'object',
-            required: ['collection', 'keys'],
+            required: ['database', 'collection', 'keys'],
             properties: {
-                database: { type: 'string' },
+                database: { type: 'string', description: 'Nome do database' },
                 collection: { type: 'string' },
                 keys: { type: 'object', description: 'Campos e direção do índice (ex: {"email": 1})' },
                 unique: { type: 'boolean', description: 'Índice único (padrão false)' },
@@ -261,6 +273,13 @@ export async function handleMongodbTool(name, args) {
                 const database = await db(args.database);
                 const result = await database.dropCollection(args.collection);
                 return { dropped: result };
+            });
+        }
+        case 'mongo_drop_database': {
+            return safeExec(async () => {
+                const database = await db(args.database);
+                const result = await database.dropDatabase();
+                return { dropped: result, database: args.database };
             });
         }
         case 'mongo_create_index': {
