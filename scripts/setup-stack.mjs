@@ -360,20 +360,28 @@ return chunks.map((texto, i) => ({
 const item = $input.first().json;
 const { instance, remoteJid, chunk, delay } = item;
 
-// Aguarda delay para simular digitação natural
-await new Promise(r => setTimeout(r, delay ?? 800));
-
 return [{
   json: {
     ...item,
+    presenceUrl: \`${EVOLUTION_URL}/chat/sendPresence/\${instance}\`,
+    presenceBody: {
+      number: remoteJid,
+      options: { delay: delay ?? 800, presence: 'composing', number: remoteJid },
+    },
     evolutionUrl: \`${EVOLUTION_URL}/message/sendText/\${instance}\`,
     evolutionBody: {
       number: remoteJid,
       text: chunk,
-      delay: 300,
+      delay: 0,
     }
   }
 }];
+`.trim();
+
+  const waitCode = `
+const item = $input.first().json;
+await new Promise(r => setTimeout(r, item.delay ?? 800));
+return [{ json: item }];
 `.trim();
 
   const saveSessionCode = `
@@ -411,11 +419,32 @@ return [{ json: { contexto: last.contexto } }];
     makeSplitInBatches('loop-chunks', 'Loop Chunks', pos(1440, 300)),
     makeCode('prep-evolution', 'Preparar Envio', prepareEvolutionCode, pos(1680, 200)),
     {
+      id: 'presence-digitando',
+      name: 'Presence Digitando',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: pos(1920, 200),
+      parameters: {
+        method: 'POST',
+        url: '={{ $json.presenceUrl }}',
+        authentication: 'headerAuth',
+        sendBody: true,
+        bodyContentType: 'json',
+        specifyBody: 'json',
+        jsonBody: '={{ JSON.stringify($json.presenceBody) }}',
+        options: { response: { response: { neverError: true } } },
+      },
+      credentials: {
+        httpHeaderAuth: { id: evolutionCredId, name: evolutionCredName },
+      },
+    },
+    makeCode('wait-typing', 'Aguardar Digitação', waitCode, pos(2160, 200)),
+    {
       id: 'evolution-send',
       name: 'Evolution Send',
       type: 'n8n-nodes-base.httpRequest',
       typeVersion: 4.2,
-      position: pos(1920, 200),
+      position: pos(2400, 200),
       parameters: {
         method: 'POST',
         url: '={{ $json.evolutionUrl }}',
@@ -446,7 +475,9 @@ return [{ json: { contexto: last.contexto } }];
         [{ node: 'Preparar Sessão', type: 'main', index: 0 }], // output 1: terminou tudo
       ],
     },
-    'Preparar Envio': { main: [[{ node: 'Evolution Send', type: 'main', index: 0 }]] },
+    'Preparar Envio': { main: [[{ node: 'Presence Digitando', type: 'main', index: 0 }]] },
+    'Presence Digitando': { main: [[{ node: 'Aguardar Digitação', type: 'main', index: 0 }]] },
+    'Aguardar Digitação': { main: [[{ node: 'Evolution Send', type: 'main', index: 0 }]] },
     'Evolution Send': { main: [[{ node: 'Loop Chunks', type: 'main', index: 0 }]] },
     'Preparar Sessão': { main: [[{ node: 'Redis SET Sessão', type: 'main', index: 0 }]] },
   };

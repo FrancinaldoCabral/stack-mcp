@@ -368,24 +368,6 @@ export const evolutionTools: Tool[] = [
       },
     },
   },
-  {
-    name: 'evolution_send_presence',
-    description: 'Envia indicador de presença (digitando/gravando) para um contato. Use antes de enviar mensagem para parecer humano.',
-    inputSchema: {
-      type: 'object',
-      required: ['instanceName', 'number'],
-      properties: {
-        instanceName: { type: 'string' },
-        number: { type: 'string' },
-        presence: {
-          type: 'string',
-          enum: ['composing', 'recording', 'paused', 'available', 'unavailable'],
-          description: 'Tipo: composing=digitando, recording=gravando áudio (padrão: composing)',
-        },
-        delay: { type: 'number', description: 'Duração em ms (padrão: 2000)' },
-      },
-    },
-  },
 ];
 
 type Args = Record<string, unknown>;
@@ -588,17 +570,6 @@ export async function handleEvolutionTool(name: string, args: Args): Promise<str
       const { instanceName, numbers } = args;
       const res = await safeRequest(() =>
         http.post(`/chat/whatsappNumbers/${instanceName}`, { numbers }).then(r => r.data)
-      );
-      return toText(res);
-    }
-    case 'evolution_send_presence': {
-      const { instanceName, number, presence, delay } = args;
-      const payload = {
-        number,
-        options: { delay: delay ?? 2000, presence: presence ?? 'composing', number },
-      };
-      const res = await safeRequest(() =>
-        http.post(`/chat/sendPresence/${instanceName}`, payload).then(r => r.data)
       );
       return toText(res);
     }
