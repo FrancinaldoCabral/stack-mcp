@@ -106,6 +106,29 @@ export const n8nTools: Tool[] = [
     description: 'Lista as credenciais configuradas no n8n (sem expor valores sensíveis).',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'n8n_create_credential',
+    description:
+      'Cria uma credencial no n8n. Tipos comuns: redis (host/port/password/database), mongoDb (connectionString), httpHeaderAuth (name/value), openAiApi (apiKey+baseUrl para OpenRouter), httpBasicAuth (user/password).',
+    inputSchema: {
+      type: 'object',
+      required: ['name', 'type', 'data'],
+      properties: {
+        name: { type: 'string', description: 'Nome amigável da credencial' },
+        type: { type: 'string', description: 'Tipo da credencial no n8n (redis, mongoDb, httpHeaderAuth, openAiApi...)' },
+        data: { type: 'object', description: 'Campos da credencial conforme o tipo escolhido' },
+      },
+    },
+  },
+  {
+    name: 'n8n_delete_credential',
+    description: 'Remove permanentemente uma credencial do n8n pelo ID.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID da credencial' } },
+    },
+  },
 ];
 
 type Args = Record<string, unknown>;
@@ -163,6 +186,15 @@ export async function handleN8nTool(name: string, args: Args): Promise<string> {
     }
     case 'n8n_list_credentials': {
       const res = await safeRequest(() => http.get('/credentials').then(r => r.data));
+      return toText(res);
+    }
+    case 'n8n_create_credential': {
+      const payload = { name: args.name, type: args.type, data: args.data };
+      const res = await safeRequest(() => http.post('/credentials', payload).then(r => r.data));
+      return toText(res);
+    }
+    case 'n8n_delete_credential': {
+      const res = await safeRequest(() => http.delete(`/credentials/${args.id}`).then(r => r.data));
       return toText(res);
     }
     default:

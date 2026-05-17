@@ -351,6 +351,36 @@ export const evolutionTools = [
             properties: { instanceName: { type: 'string' } },
         },
     },
+    {
+        name: 'evolution_check_number',
+        description: 'Verifica se números de telefone existem no WhatsApp. Retorna jid, exists e number para cada.',
+        inputSchema: {
+            type: 'object',
+            required: ['instanceName', 'numbers'],
+            properties: {
+                instanceName: { type: 'string' },
+                numbers: { type: 'array', items: { type: 'string' }, description: 'Números com código do país (ex: 5511999999999)' },
+            },
+        },
+    },
+    {
+        name: 'evolution_send_presence',
+        description: 'Envia indicador de presença (digitando/gravando) para um contato. Use antes de enviar mensagem para parecer humano.',
+        inputSchema: {
+            type: 'object',
+            required: ['instanceName', 'number'],
+            properties: {
+                instanceName: { type: 'string' },
+                number: { type: 'string' },
+                presence: {
+                    type: 'string',
+                    enum: ['composing', 'recording', 'paused', 'available', 'unavailable'],
+                    description: 'Tipo: composing=digitando, recording=gravando áudio (padrão: composing)',
+                },
+                delay: { type: 'number', description: 'Duração em ms (padrão: 2000)' },
+            },
+        },
+    },
 ];
 export async function handleEvolutionTool(name, args) {
     const http = client();
@@ -513,6 +543,20 @@ export async function handleEvolutionTool(name, args) {
         }
         case 'evolution_restart_instance': {
             const res = await safeRequest(() => http.put(`/instance/restart/${args.instanceName}`).then(r => r.data));
+            return toText(res);
+        }
+        case 'evolution_check_number': {
+            const { instanceName, numbers } = args;
+            const res = await safeRequest(() => http.post(`/chat/whatsappNumbers/${instanceName}`, { numbers }).then(r => r.data));
+            return toText(res);
+        }
+        case 'evolution_send_presence': {
+            const { instanceName, number, presence, delay } = args;
+            const payload = {
+                number,
+                options: { delay: delay ?? 2000, presence: presence ?? 'composing', number },
+            };
+            const res = await safeRequest(() => http.post(`/chat/sendPresence/${instanceName}`, payload).then(r => r.data));
             return toText(res);
         }
         default:
