@@ -129,7 +129,7 @@ export async function handleN8nTool(name, args) {
         }
         case 'n8n_update_workflow': {
             const { id, ...body } = args;
-            const res = await safeRequest(() => http.patch(`/workflows/${id}`, body).then(r => r.data));
+            const res = await safeRequest(() => http.put(`/workflows/${id}`, body).then(r => r.data));
             return toText(res);
         }
         case 'n8n_activate_workflow': {
