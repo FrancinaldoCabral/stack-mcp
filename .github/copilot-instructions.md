@@ -116,30 +116,93 @@ Webhook base: `https://workflows.vendly.chat/webhook/{path}`
 
 ---
 
+## N8N — Regra crítica: sempre buscar o workflow atual antes de modificar
+
+Antes de propor qualquer mudança em workflow N8N, **sempre** buscar o JSON atual via API:
+```
+GET https://workflows.vendly.chat/api/v1/workflows/{id}
+headers: X-N8N-API-KEY: $N8N_API_KEY
+```
+Nunca assumir que o workflow tem exatamente o que o setup-stack.mjs teria gerado — o usuário pode ter editado manualmente. Verificar nós, conexões, IDs e pinned data antes de qualquer proposta.
+
+Para atualizar um workflow, usar **fixes cirúrgicos via API** — NUNCA reexecutar setup-stack.mjs (ele sobrescreve credenciais manuais do usuário).
+
+PUT `https://workflows.vendly.chat/api/v1/workflows/{id}` — body aceita **somente** estes campos (outros causam erro 400):
+```json
+{ "name": "...", "nodes": [...], "connections": {...}, "settings": { "executionOrder": "v1", "saveManualExecutions": true } }
+```
+Campos proibidos no body: `active` (read-only), `meta`, `id`, `createdAt`, `updatedAt`, `binaryMode` em settings.
+
+---
+
+## N8N — Webhook v2: payload wrapper
+
+O nó Webhook v2 do N8N envelopa o body: `$input.first().json = { body: {...}, headers: {...}, query: {...} }`.  
+Sempre desembalar com: `const data = $input.first().json?.body ?? $input.first().json;`  
+Referências a nós anteriores (`$('NomeDoNo')`) só funcionam em nós que executam **antes** de SplitInBatches ou IF — dentro do loop, os dados devem vir via `$input`, não via `$('...')`.
+
+---
+
 ## N8N — Nós nativos (para uso em workflows)
 
 ```javascript
-// Redis RPUSH
+// Operações disponíveis no nó Redis N8N: delete, get, increment, info, keys, listLength, pop, publish, push, set
+// NÃO EXISTE: lrange, hget, hset — use GET/SET com JSON array para acumular listas
+
+// Redis PUSH (RPUSH — adiciona ao final da lista)
 { type: 'n8n-nodes-base.redis', typeVersion: 1,
-  parameters: { operation: 'lPush', key: '...', value: '...' },
+  parameters: { operation: 'push', list: '...', messageData: '...' },
   credentials: { redis: { id: 'CRED_ID', name: 'Redis Vendly' } } }
 
-// Redis GET
-{ parameters: { operation: 'get', key: '...' } }
+// Redis POP (LPOP — retira um item da lista)
+{ parameters: { operation: 'pop', list: '...', tail: false } }  // tail:true = RPOP
 
-// Redis SET
+// Redis GET (string)
+{ parameters: { operation: 'get', key: '...', propertyName: 'value', options: {} } }
+
+// Redis SET (string)
 { parameters: { operation: 'set', key: '...', value: '...' } }
+// Com TTL: { parameters: { operation: 'set', key: '...', value: '...', expire: true, ttl: 10 } }
 
-// HTTP para Evolution API
+// BUFFER DE MENSAGENS (padrão PUSH/POP — atômico, sem race condition):
+// Entrada: PUSH buffer:{inst}:{tel} (RPUSH — atômico, cada mensagem é uma entrada isolada)
+//   { operation: 'push', list: "={{ 'buffer:'+$json.instance+':'+$json.telefone }}", messageData: '={{ JSON.stringify($json) }}' }
+//
+// BUFFER DE MENSAGENS (padrão PUSH/POP — atômico, sem race condition):
+// Entrada: PUSH buffer:{inst}:{tel} (RPUSH — atômico, cada mensagem é uma entrada isolada)
+//   { operation: 'push', list: "={{ 'buffer:'+$json.instance+':'+$json.telefone }}", messageData: '={{ JSON.stringify($json) }}' }
+//
+// Debounce (após Verificar): llen buffer → Gerar Iteracoes → POP Buffer (×N) → Parse Item (×N) → Consolidar (runOnceForAllItems)
+//   llen: { operation: 'llen', list: "={{ 'buffer:'+$json.instance+':'+$json.telefone }}" } → retorna { "buffer:inst:tel": N }
+//   Gerar Iteracoes: lê N com Object.values(raw).find(v => typeof v === 'number') → Array.from({length:n})
+//   POP Buffer: { operation: 'pop', list: "={{ 'buffer:'+$json.instance+':'+$json.telefone }}", tail: false }
+//   Parse Item: JSON.parse($input.first().json.value)
+//   Consolidar: mode='runOnceForAllItems', lê $input.all()
+//   NÃO precisa de DEL — POP já remove atomicamente cada item
+//   NÃO usar SplitInBatches: o Done Branch devolve itens de contexto, não os itens do loop body
+//
+// ATENÇÃO: N8N Redis armazena "List Length" internamente como operation='llen' (não 'listLength')
+// O parâmetro da chave em llen/push/pop é 'list' (não 'key'); apenas get/set/delete usam 'key'
+// llen retorna o comprimento com o nome da chave como field: { "buffer:inst:tel": 12 } — usar Object.values()
+//
+// NUNCA usar GET/SET com append para buffer: tem race condition quando execuções N8N se sobrepõem
+
+// HTTP para Evolution API (e qualquer outro serviço com headerAuth)
+// SEMPRE usar genericCredentialType + genericAuthType — NUNCA authentication: 'headerAuth' diretamente
 { type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
   parameters: { method: 'POST', url: 'https://evolution.vendly.chat/message/sendText/INSTANCE',
-    authentication: 'headerAuth', sendBody: true, bodyContentType: 'json', specifyBody: 'json',
-    jsonBody: '={{ JSON.stringify({number, text}) }}' },
-  credentials: { httpHeaderAuth: { id: 'CRED_ID', name: 'Evolution API' } } }
+    authentication: 'genericCredentialType', genericAuthType: 'httpHeaderAuth',
+    sendBody: true, specifyBody: 'json',
+    jsonBody: '={{ JSON.stringify({number, text}) }}',
+    options: { response: { response: { neverError: true } } } },
+  credentials: { httpHeaderAuth: { id: 'K3YGChLlsj7fRfYX', name: 'Evolution API' } } }
 
 // OpenRouter
 // url: https://openrouter.ai/api/v1/chat/completions
+// modelo: google/gemini-2.0-flash-lite-001 (multimodal real — NÃO substitua)
 // credential: httpHeaderAuth, name=Authorization, value=Bearer sk-or-v1-...
+// IMPORTANTE: usar genericCredentialType: 'httpHeaderAuth' (NÃO httpBearerAuth)
+// O header Authorization é do tipo Key/Value dentro de httpHeaderAuth — NÃO usar autenticação Bearer nativa do N8N
 ```
 
 ---
@@ -148,14 +211,20 @@ Webhook base: `https://workflows.vendly.chat/webhook/{path}`
 
 ```
 Evolution API → Webhook /evolution → [CORE] Entrada de Mensagem
-  → Redis RPUSH buffer:instance:telefone (nó nativo)
-  → HTTP POST /webhook/agent-executor
+  → RPUSH buffer:instance:telefone (atômico — sem race condition)
+  → SET debounce_ts:instance:telefone
+  → HTTP POST /webhook/debounce-trigger
+
+[CORE] Processar Buffer (Debounce)
+  → Webhook /debounce-trigger → aguarda 5s → GET debounce_ts → Verificar (ts match)
+  → listLength buffer → Gerar N itens → SplitInBatches(1)
+      Loop: POP buffer (LPOP) → Parse Item
+      Done: Consolidar (join \n) → HTTP POST /webhook/agent-executor
 
 [AGENT] Executor
   → Redis GET sessao:instance:telefone
-  → Code: monta prompt com histórico
-  → HTTP POST OpenRouter (chat/completions)
-  → Code: divide resposta em chunks curtos
+  → Code: monta prompt com histórico (slice(-100) ≈ 100 turnos)
+  → HTTP POST OpenRouter (chat/completions, sem max_tokens — usa capacidade total do modelo)
   → Loop: para cada chunk:
       → aguarda delay (simula digitação)
       → HTTP POST Evolution /message/sendText
@@ -196,6 +265,8 @@ COOLIFY_URL=https://coolify.redatudo.online
 COOLIFY_TOKEN=...
 OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct:free  # opcional
+OPENROUTER_MULTIMODAL_MODEL=google/gemini-2.0-flash-lite-001  # modelo multimodal real usado no N8N — NÃO substituir
+OPENROUTER_TTS_MODEL=                                     # opcional; se definido, responde com áudio quando usuário envia áudio
 PORT=3000  # Coolify usa 3000, local usa 3001
 ```
 
@@ -236,4 +307,10 @@ case 'servico_acao': {
 | 406 nas chamadas N8N             | Header Accept faltando                         | Adicionar `Accept: application/json, text/event-stream` |
 | 400 no update_workflow           | Body sem `settings: {}`                        | Incluir `settings: {}` no payload            |
 | Primeira mensagem falha          | N8N chama MCP via HTTP Request                 | Substituir por nó nativo `n8n-nodes-base.redis` |
+| EAI_AGAIN hostname redis         | N8N e Redis em redes Docker diferentes         | Conectar N8N à rede Docker do Redis no Coolify |
+| Redis node: operação inválida    | Usar `lPush`/`key`/`value` → `push`/`list`/`messageData` | `operation: 'push', list: keyExpr, messageData: valueExpr` |
+| `lrange` não existe no nó Redis  | N8N Redis não tem lrange — tenta rodar, retorna 0 itens | Usar PUSH/POP com SplitInBatches (ver padrão BUFFER DE MENSAGENS acima) |
+| Race condition no buffer         | GET/SET tem janela onde 2 execuções leem buffer vazio simultâneo | Usar PUSH (atômico) na Entrada e POP no loop do Debounce — NUNCA GET/SET para acumular |
 | Secret bloqueado no git push     | Chave real em arquivo comitado                 | Usar `.env` (no .gitignore) ou placeholder em `.env.example` |
+| OpenRouter quebra após deploy    | Copilot trocou modelo ou tipo de auth          | Modelo fixo: `google/gemini-2.0-flash-lite-001`; auth: `genericCredentialType: httpHeaderAuth` com header `Authorization: Bearer sk-or-v1-...` — NUNCA usar `httpBearerAuth` nativo |
+| Headers Authorization incorretos | Copilot usa Bearer auth nativa do N8N          | Sempre usar `genericCredentialType: 'httpHeaderAuth'` com par nome/valor explícito — o usuário padronizou assim e não deve ser alterado |

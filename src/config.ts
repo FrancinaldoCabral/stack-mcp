@@ -28,4 +28,8 @@ export const config = {
     url: process.env.COOLIFY_URL ?? 'http://localhost:8000',
     token: process.env.COOLIFY_TOKEN ?? '',
   },
+  openrouter: {
+    apiKey: process.env.OPENROUTER_API_KEY ?? '',
+    embeddingModel: 'openai/text-embedding-3-small',
+  },
 };

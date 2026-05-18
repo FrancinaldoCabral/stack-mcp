@@ -34,6 +34,8 @@ const EVOLUTION_KEY = ENV('EVOLUTION_API_KEY');
 const REDIS_URL = ENV('REDIS_URL'); // redis://:pass@host:port/db
 const OPENROUTER_KEY = ENV('OPENROUTER_API_KEY');
 const OPENROUTER_MODEL = ENV('OPENROUTER_MODEL') || 'meta-llama/llama-3.3-70b-instruct:free';
+const OPENROUTER_MULTIMODAL_MODEL = ENV('OPENROUTER_MULTIMODAL_MODEL') || OPENROUTER_MODEL;
+const OPENROUTER_TTS_MODEL = ENV('OPENROUTER_TTS_MODEL') || '';
 
 // Parse redis URL
 const redisMatch = REDIS_URL.match(/^redis:\/\/:([^@]+)@([^:]+):(\d+)\/(\d+)/);
@@ -111,7 +113,7 @@ function makeRedisGet(id, name, keyExpr, credId, credName, posArr) {
   return {
     id, name, type: 'n8n-nodes-base.redis', typeVersion: 1, position: posArr,
     credentials: { redis: { id: credId, name: credName } },
-    parameters: { operation: 'get', key: keyExpr },
+    parameters: { operation: 'get', key: keyExpr, propertyName: 'value' },
   };
 }
 
@@ -132,7 +134,7 @@ function makeRedisRpush(id, name, keyExpr, valueExpr, credId, credName, posArr) 
   return {
     id, name, type: 'n8n-nodes-base.redis', typeVersion: 1, position: posArr,
     credentials: { redis: { id: credId, name: credName } },
-    parameters: { operation: 'lPush', key: keyExpr, value: valueExpr },
+    parameters: { operation: 'push', list: keyExpr, messageData: valueExpr },
   };
 }
 
@@ -182,8 +184,10 @@ function makeHttpRequest(id, name, method, urlExpr, bodyExpr, credType, credId, 
 }
 
 function makeSplitInBatches(id, name, posArr) {
+  // typeVersion 1: batchSize como parâmetro top-level funciona corretamente na API do N8N
+  // typeVersion 3 ignora batchSize e salta direto para done (output 1) sem processar itens
   return {
-    id, name, type: 'n8n-nodes-base.splitInBatches', typeVersion: 3, position: posArr,
+    id, name, type: 'n8n-nodes-base.splitInBatches', typeVersion: 1, position: posArr,
     parameters: { batchSize: 1, options: {} },
   };
 }
@@ -276,14 +280,20 @@ return [{ json: { instance, remoteJid, telefone, messageId, pushName, timestamp,
 // WORKFLOW: [AGENT] Executor
 // ──────────────────────────────────────────────────
 function buildAgentWorkflow(wf, redisCredId, redisCredName, evolutionCredId, evolutionCredName) {
-  const buildPromptCode = `
-const msg = $input.first().json;
-const sessao = $('Redis GET Sessão').first().json;
+  // respondWithAudio: só responde com áudio TTS se OPENROUTER_TTS_MODEL estiver configurado
+  const respondWithAudioExpr = OPENROUTER_TTS_MODEL
+    ? `msg.tipo === 'audio'`
+    : 'false';
 
-// Histórico de conversa armazenado no Redis como JSON
+  const buildPromptCode = `
+// Redis GET substitui o item inteiro — buscar dados originais via $('Desembalar Payload')
+const msg = $('Desembalar Payload').first().json;
+const sessao = $input.first().json; // output do Redis GET: { value: <json_or_null> }
+
 let historico = [];
 try {
-  const raw = sessao.value ?? sessao;
+  // 'value' = propertyName configurado no Redis GET; fallback para 'propertyName' (legado)
+  const raw = sessao.value ?? sessao.propertyName ?? null;
   if (typeof raw === 'string') historico = JSON.parse(raw);
   else if (Array.isArray(raw)) historico = raw;
 } catch {}
@@ -293,67 +303,106 @@ Nome do cliente: \${msg.pushName || 'cliente'}
 Canal: WhatsApp
 Instância: \${msg.instance}
 Regras:
-- Divida respostas longas em múltiplas mensagens curtas (3-8 palavras cada parte)
+- Divida respostas longas em múltiplas mensagens curtas
 - Use emojis com moderação
 - Nunca envie blocos longos de texto
 - Responda apenas ao que foi perguntado\`;
 
-const mensagemAtual = \`[\${msg.tipo}] \${msg.conteudo}\`;
+// Constrói conteúdo multimodal baseado no tipo da mensagem
+let userContent;
+if (msg.tipo === 'imagem' && msg.metadata?.url) {
+  userContent = [
+    { type: 'text', text: msg.conteudo || 'O cliente enviou uma imagem. Analise e responda:' },
+    { type: 'image_url', image_url: { url: msg.metadata.url } },
+  ];
+} else if (msg.tipo === 'audio') {
+  userContent = '[mensagem de voz recebida] Peça educadamente ao cliente que envie a mensagem em texto.';
+} else if (msg.tipo === 'documento') {
+  userContent = \`[documento: \${msg.metadata?.fileName || msg.conteudo}]\`;
+} else if (msg.tipo === 'video') {
+  userContent = \`[vídeo enviado: \${msg.conteudo}]\`;
+} else if (msg.tipo === 'localizacao') {
+  userContent = \`[localização: lat=\${msg.metadata?.lat}, lng=\${msg.metadata?.lng}]\`;
+} else {
+  userContent = msg.conteudo;
+}
 
 const messages = [
   { role: 'system', content: sistemaPrompt },
-  ...historico.slice(-20), // mantém últimas 20 mensagens
-  { role: 'user', content: mensagemAtual },
+  ...historico.slice(-20),
+  { role: 'user', content: userContent },
 ];
 
-return [{ json: { ...msg, messages, historico } }];
+const respondWithAudio = ${respondWithAudioExpr};
+
+return [{ json: { ...msg, messages, historico, respondWithAudio } }];
 `.trim();
 
+  // NOTA: $input.first() após HTTP Request = resposta da API. Usar $('Construir Prompt') para dados originais.
   const parseChunksCode = `
-const item = $input.first().json;
-const resp = $('OpenRouter').first().json;
+const promptData = $('Construir Prompt').first().json;
+const resp = $input.first().json;
 
 const content = resp.choices?.[0]?.message?.content ?? resp.error?.message ?? 'Desculpe, erro interno.';
-const msgs = item.messages;
-const historico = item.historico ?? [];
+const historico = promptData.historico ?? [];
+const respondWithAudio = promptData.respondWithAudio ?? false;
 
-// Divide resposta em chunks naturais (por parágrafo/frase curta/linha)
 const chunks = content
   .split(/\\n+/)
   .map(s => s.trim())
   .filter(s => s.length > 0)
   .flatMap(s => {
-    // Se um parágrafo é muito longo, divide nas sentenças
     if (s.length <= 180) return [s];
     return s.match(/[^.!?]+[.!?]+/g)?.map(x => x.trim()).filter(Boolean) ?? [s];
   });
 
-// Atualiza histórico
 const novoHistorico = [
   ...historico,
-  { role: 'user', content: item.conteudo },
-  { role: 'assistant', content: content },
+  { role: 'user', content: typeof promptData.messages[promptData.messages.length - 1]?.content === 'string'
+      ? promptData.messages[promptData.messages.length - 1].content
+      : promptData.conteudo },
+  { role: 'assistant', content },
 ];
 
-// Prepara contexto (passado adiante para o Redis SET no final)
 const contexto = {
-  instance: item.instance,
-  telefone: item.telefone,
-  remoteJid: item.remoteJid,
+  instance: promptData.instance,
+  telefone: promptData.telefone,
+  remoteJid: promptData.remoteJid,
   historico: novoHistorico,
 };
 
-// Retorna um item por chunk + último item com contexto para salvar sessão
 return chunks.map((texto, i) => ({
   json: {
     chunk: texto,
+    fullText: content,
     isLast: i === chunks.length - 1,
+    respondWithAudio,
     contexto,
-    instance: item.instance,
-    remoteJid: item.remoteJid,
+    instance: promptData.instance,
+    remoteJid: promptData.remoteJid,
     delay: 800 + i * 600,
   }
 }));
+`.trim();
+
+  const extractB64TtsCode = `
+const binaryData = $input.first().binary?.data;
+if (!binaryData) throw new Error('TTS: sem dados de áudio na resposta');
+const audioBase64 = binaryData.data;
+
+const allChunks = $('Parsear Chunks').all();
+const ctx = allChunks[allChunks.length - 1]?.json ?? {};
+
+return [{
+  json: {
+    audioBase64,
+    instance: ctx.instance,
+    remoteJid: ctx.remoteJid,
+    evolutionAudioUrl: \`${EVOLUTION_URL}/message/sendWhatsAppAudio/\${ctx.instance}\`,
+    evolutionAudioBody: { number: ctx.remoteJid, audio: audioBase64, encoding: true },
+    contexto: ctx.contexto,
+  }
+}];
 `.trim();
 
   const prepareEvolutionCode = `
@@ -369,11 +418,7 @@ return [{
       options: { delay: delay ?? 800, presence: 'composing', number: remoteJid },
     },
     evolutionUrl: \`${EVOLUTION_URL}/message/sendText/\${instance}\`,
-    evolutionBody: {
-      number: remoteJid,
-      text: chunk,
-      delay: 0,
-    }
+    evolutionBody: { number: remoteJid, text: chunk, delay: 0 },
   }
 }];
 `.trim();
@@ -386,13 +431,14 @@ return [{ json: item }];
 
   const saveSessionCode = `
 const items = $input.all();
-// Pega o contexto do último item processado
 const last = items[items.length - 1]?.json ?? {};
 return [{ json: { contexto: last.contexto } }];
 `.trim();
 
   const nodes = [
     makeWebhook('webhook-agent', 'Webhook Agente', 'agent-executor', 'onReceived'),
+    // Desembala wrapper do Webhook v2: {body, headers, query} → dados diretos
+    makeCode('unwrap-payload', 'Desembalar Payload', 'const raw = $input.first().json; const data = raw.body ?? raw; return [{ json: data }];', pos(360, 300)),
     makeRedisGet('redis-get-sessao', 'Redis GET Sessão', "={{ 'sessao:' + $json.instance + ':' + $json.telefone }}", redisCredId, redisCredName, pos(480, 300)),
     makeCode('build-prompt', 'Construir Prompt', buildPromptCode, pos(720, 300)),
     {
@@ -408,7 +454,7 @@ return [{ json: { contexto: last.contexto } }];
         sendBody: true,
         bodyContentType: 'json',
         specifyBody: 'json',
-        jsonBody: `={{ JSON.stringify({ model: '${OPENROUTER_MODEL}', messages: $json.messages, max_tokens: 1024, temperature: 0.8 }) }}`,
+        jsonBody: `={{ JSON.stringify({ model: '${OPENROUTER_MULTIMODAL_MODEL}', messages: $json.messages, max_tokens: 1024, temperature: 0.8 }) }}`,
         options: {},
       },
       credentials: {
@@ -416,14 +462,68 @@ return [{ json: { contexto: last.contexto } }];
       },
     },
     makeCode('parse-chunks', 'Parsear Chunks', parseChunksCode, pos(1200, 300)),
-    makeSplitInBatches('loop-chunks', 'Loop Chunks', pos(1440, 300)),
-    makeCode('prep-evolution', 'Preparar Envio', prepareEvolutionCode, pos(1680, 200)),
+    // === IF: responde com áudio TTS ou texto normal? ===
+    {
+      id: 'if-audio-response',
+      name: 'IF Responder com Áudio?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: pos(1440, 300),
+      parameters: {
+        conditions: {
+          boolean: [{ value1: '={{ $json.respondWithAudio }}', operation: 'equal', value2: true }],
+        },
+      },
+    },
+    // === CAMINHO ÁUDIO (TTS) — saída true do IF ===
+    {
+      id: 'openrouter-tts',
+      name: 'OpenRouter TTS',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: pos(1680, 160),
+      parameters: {
+        method: 'POST',
+        url: 'https://openrouter.ai/api/v1/audio/speech',
+        authentication: 'headerAuth',
+        sendBody: true,
+        bodyContentType: 'json',
+        specifyBody: 'json',
+        jsonBody: `={{ JSON.stringify({ model: '${OPENROUTER_TTS_MODEL || 'openai/gpt-4o-mini-tts'}', input: $json.fullText, voice: 'alloy', response_format: 'mp3' }) }}`,
+        options: { response: { response: { responseFormat: 'file' } } },
+      },
+      credentials: { httpHeaderAuth: { id: null, name: 'OpenRouter' } },
+    },
+    makeCode('extract-b64-tts', 'Extrair B64 TTS', extractB64TtsCode, pos(1920, 160)),
+    {
+      id: 'evolution-send-audio',
+      name: 'Evolution Send Áudio',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: pos(2160, 160),
+      parameters: {
+        method: 'POST',
+        url: '={{ $json.evolutionAudioUrl }}',
+        authentication: 'headerAuth',
+        sendBody: true,
+        bodyContentType: 'json',
+        specifyBody: 'json',
+        jsonBody: '={{ JSON.stringify($json.evolutionAudioBody) }}',
+        options: { response: { response: { neverError: true } } },
+      },
+      credentials: { httpHeaderAuth: { id: evolutionCredId, name: evolutionCredName } },
+    },
+    makeCode('save-session-audio', 'Preparar Sessão Áudio', 'const item = $input.first().json; return [{ json: { contexto: item.contexto } }];', pos(2400, 160)),
+    makeRedisSet('redis-set-sessao-audio', 'Redis SET Sessão Áudio', "={{ 'sessao:' + $json.contexto.instance + ':' + $json.contexto.telefone }}", '={{ JSON.stringify($json.contexto.historico) }}', redisCredId, redisCredName, pos(2640, 160)),
+    // === CAMINHO TEXTO — saída false do IF ===
+    makeSplitInBatches('loop-chunks', 'Loop Chunks', pos(1680, 440)),
+    makeCode('prep-evolution', 'Preparar Envio', prepareEvolutionCode, pos(1920, 440)),
     {
       id: 'presence-digitando',
       name: 'Presence Digitando',
       type: 'n8n-nodes-base.httpRequest',
       typeVersion: 4.2,
-      position: pos(1920, 200),
+      position: pos(2160, 400),
       parameters: {
         method: 'POST',
         url: '={{ $json.presenceUrl }}',
@@ -434,17 +534,15 @@ return [{ json: { contexto: last.contexto } }];
         jsonBody: '={{ JSON.stringify($json.presenceBody) }}',
         options: { response: { response: { neverError: true } } },
       },
-      credentials: {
-        httpHeaderAuth: { id: evolutionCredId, name: evolutionCredName },
-      },
+      credentials: { httpHeaderAuth: { id: evolutionCredId, name: evolutionCredName } },
     },
-    makeCode('wait-typing', 'Aguardar Digitação', waitCode, pos(2160, 200)),
+    makeCode('wait-typing', 'Aguardar Digitação', waitCode, pos(2400, 400)),
     {
       id: 'evolution-send',
       name: 'Evolution Send',
       type: 'n8n-nodes-base.httpRequest',
       typeVersion: 4.2,
-      position: pos(2400, 200),
+      position: pos(2640, 400),
       parameters: {
         method: 'POST',
         url: '={{ $json.evolutionUrl }}',
@@ -455,24 +553,35 @@ return [{ json: { contexto: last.contexto } }];
         jsonBody: '={{ JSON.stringify($json.evolutionBody) }}',
         options: {},
       },
-      credentials: {
-        httpHeaderAuth: { id: evolutionCredId, name: evolutionCredName },
-      },
+      credentials: { httpHeaderAuth: { id: evolutionCredId, name: evolutionCredName } },
     },
-    makeCode('save-session', 'Preparar Sessão', saveSessionCode, pos(1680, 440)),
-    makeRedisSet('redis-set-sessao', 'Redis SET Sessão', "={{ 'sessao:' + $json.contexto.instance + ':' + $json.contexto.telefone }}", '={{ JSON.stringify($json.contexto.historico) }}', redisCredId, redisCredName, pos(1920, 440)),
+    makeCode('save-session', 'Preparar Sessão', saveSessionCode, pos(2880, 440)),
+    makeRedisSet('redis-set-sessao', 'Redis SET Sessão', "={{ 'sessao:' + $json.contexto.instance + ':' + $json.contexto.telefone }}", '={{ JSON.stringify($json.contexto.historico) }}', redisCredId, redisCredName, pos(3120, 440)),
   ];
 
   const connections = {
-    'Webhook Agente': { main: [[{ node: 'Redis GET Sessão', type: 'main', index: 0 }]] },
+    'Webhook Agente': { main: [[{ node: 'Desembalar Payload', type: 'main', index: 0 }]] },
+    'Desembalar Payload': { main: [[{ node: 'Redis GET Sessão', type: 'main', index: 0 }]] },
     'Redis GET Sessão': { main: [[{ node: 'Construir Prompt', type: 'main', index: 0 }]] },
     'Construir Prompt': { main: [[{ node: 'OpenRouter', type: 'main', index: 0 }]] },
     'OpenRouter': { main: [[{ node: 'Parsear Chunks', type: 'main', index: 0 }]] },
-    'Parsear Chunks': { main: [[{ node: 'Loop Chunks', type: 'main', index: 0 }]] },
+    'Parsear Chunks': { main: [[{ node: 'IF Responder com Áudio?', type: 'main', index: 0 }]] },
+    'IF Responder com Áudio?': {
+      main: [
+        [{ node: 'OpenRouter TTS', type: 'main', index: 0 }],  // output 0 (true) → áudio
+        [{ node: 'Loop Chunks', type: 'main', index: 0 }],     // output 1 (false) → texto
+      ],
+    },
+    // Caminho áudio
+    'OpenRouter TTS': { main: [[{ node: 'Extrair B64 TTS', type: 'main', index: 0 }]] },
+    'Extrair B64 TTS': { main: [[{ node: 'Evolution Send Áudio', type: 'main', index: 0 }]] },
+    'Evolution Send Áudio': { main: [[{ node: 'Preparar Sessão Áudio', type: 'main', index: 0 }]] },
+    'Preparar Sessão Áudio': { main: [[{ node: 'Redis SET Sessão Áudio', type: 'main', index: 0 }]] },
+    // Caminho texto
     'Loop Chunks': {
       main: [
-        [{ node: 'Preparar Envio', type: 'main', index: 0 }],  // output 0: processa próximo item
-        [{ node: 'Preparar Sessão', type: 'main', index: 0 }], // output 1: terminou tudo
+        [{ node: 'Preparar Envio', type: 'main', index: 0 }],  // output 0: processa item
+        [{ node: 'Preparar Sessão', type: 'main', index: 0 }], // output 1: terminou
       ],
     },
     'Preparar Envio': { main: [[{ node: 'Presence Digitando', type: 'main', index: 0 }]] },
@@ -497,7 +606,11 @@ async function main() {
   console.log('\n🚀 setup-stack.mjs — configurando N8N\n');
   console.log(`  N8N: ${N8N_URL}`);
   console.log(`  Evolution: ${EVOLUTION_URL}`);
-  console.log(`  Redis: ${REDIS_HOST}:${REDIS_PORT}\n`);
+  console.log(`  Redis: ${REDIS_HOST}:${REDIS_PORT}`);
+  console.log(`  Modelo LLM: ${OPENROUTER_MULTIMODAL_MODEL}`);
+  if (OPENROUTER_TTS_MODEL) console.log(`  Modelo TTS: ${OPENROUTER_TTS_MODEL}`);
+  if (REDIS_HOST.length < 20) console.warn(`  ⚠️  REDIS_HOST parece um hostname Coolify interno (${REDIS_HOST}). Se N8N der EAI_AGAIN, conecte N8N e Redis na mesma rede Docker no Coolify.`);
+  console.log('');
 
   // 1. Criar/encontrar credenciais
   console.log('📦 Credenciais:\n');
@@ -542,6 +655,8 @@ async function main() {
     // Preenche credencial OpenRouter no nó
     const orNode = updated.nodes.find(n => n.id === 'openrouter-llm');
     if (orNode) orNode.credentials.httpHeaderAuth.id = openrouterCredId;
+    const ttsNode = updated.nodes.find(n => n.id === 'openrouter-tts');
+    if (ttsNode) ttsNode.credentials.httpHeaderAuth.id = openrouterCredId;
     await updateWorkflow(WF.agent, updated);
     console.log('    ✅ Atualizado');
     try { await activateWorkflow(WF.agent); console.log('    ✅ Ativado'); } catch {}

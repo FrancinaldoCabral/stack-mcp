@@ -27,4 +27,8 @@ export declare const config: {
         url: string;
         token: string;
     };
+    openrouter: {
+        apiKey: string;
+        embeddingModel: string;
+    };
 };

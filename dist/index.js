@@ -11,6 +11,7 @@ import { mongodbTools, handleMongodbTool, closeMongo } from './tools/mongodb.js'
 import { redisTools, handleRedisTool, closeRedis } from './tools/redis.js';
 import { qdrantTools, handleQdrantTool } from './tools/qdrant.js';
 import { coolifyTools, handleCoolifyTool } from './tools/coolify.js';
+import { intelligenceTools, handleIntelligenceTool } from './tools/intelligence.js';
 // ── Registro global de ferramentas ─────────────────────────────────────────
 const ALL_TOOLS = [
     ...n8nTools,
@@ -20,6 +21,7 @@ const ALL_TOOLS = [
     ...redisTools,
     ...qdrantTools,
     ...coolifyTools,
+    ...intelligenceTools,
 ];
 // ── Router central ─────────────────────────────────────────────────────────
 async function routeTool(name, args) {
@@ -37,6 +39,8 @@ async function routeTool(name, args) {
         return handleQdrantTool(name, args);
     if (name.startsWith('coolify_'))
         return handleCoolifyTool(name, args);
+    if (name.startsWith('intelligence_') || name.startsWith('customer_') || name.startsWith('business_'))
+        return handleIntelligenceTool(name, args);
     return `❌ Ferramenta não encontrada: ${name}`;
 }
 // ── Factory: cria um Server MCP com todos os handlers ───────────────────────
