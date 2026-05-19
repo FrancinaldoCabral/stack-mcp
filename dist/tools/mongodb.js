@@ -1,15 +1,18 @@
 import { MongoClient } from 'mongodb';
 import { config } from '../config.js';
 let _client = null;
-async function getClient() {
+export async function getClient() {
     if (_client)
         return _client;
     _client = new MongoClient(config.mongodb.uri, { connectTimeoutMS: 10_000, serverSelectionTimeoutMS: 10_000 });
     await _client.connect();
     return _client;
 }
-function db(dbName) {
+export function getDb(dbName = 'vendly') {
     return getClient().then(c => c.db(dbName));
+}
+function db(dbName) {
+    return getDb(dbName);
 }
 export const mongodbTools = [
     {

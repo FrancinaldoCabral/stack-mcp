@@ -31,4 +31,7 @@ export declare const config: {
         apiKey: string;
         embeddingModel: string;
     };
+    admin: {
+        apiKey: string;
+    };
 };

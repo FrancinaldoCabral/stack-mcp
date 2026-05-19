@@ -1,5 +1,8 @@
 import 'dotenv/config';
 import { createServer } from 'node:http';
+import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -17,6 +20,7 @@ import { redisTools, handleRedisTool, closeRedis } from './tools/redis.js';
 import { qdrantTools, handleQdrantTool } from './tools/qdrant.js';
 import { coolifyTools, handleCoolifyTool } from './tools/coolify.js';
 import { intelligenceTools, handleIntelligenceTool } from './tools/intelligence.js';
+import { apiRouter } from './web/router.js';
 
 // ── Registro global de ferramentas ─────────────────────────────────────────
 const ALL_TOOLS = [
@@ -89,6 +93,19 @@ async function main() {
 
   if (port) {
     // ── Modo HTTP: nova instância de server+transport por request (stateless) ─
+    // ── Express app for dashboard + REST API ─────────────────────────────
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const publicDir = path.resolve(__dirname, '..', 'public');
+
+    const webApp = express();
+    webApp.use(express.json({ limit: '2mb' }));
+    webApp.use('/api', apiRouter);
+    webApp.use(express.static(publicDir));
+    // SPA fallback — serve index.html for all non-API routes
+    webApp.get(/^\/(?!api|mcp|health).*/, (_req, webRes) => {
+      webRes.sendFile(path.join(publicDir, 'index.html'));
+    });
+
     const httpServer = createServer(async (req, res) => {
       if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
         const srv = makeMcpServer();
@@ -110,8 +127,8 @@ async function main() {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('OK');
       } else {
-        res.writeHead(404);
-        res.end('Not found');
+        // Delegate to Express (dashboard + API)
+        webApp(req, res);
       }
     });
 

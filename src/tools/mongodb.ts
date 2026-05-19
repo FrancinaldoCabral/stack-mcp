@@ -4,15 +4,19 @@ import { config } from '../config.js';
 
 let _client: MongoClient | null = null;
 
-async function getClient(): Promise<MongoClient> {
+export async function getClient(): Promise<MongoClient> {
   if (_client) return _client;
   _client = new MongoClient(config.mongodb.uri, { connectTimeoutMS: 10_000, serverSelectionTimeoutMS: 10_000 });
   await _client.connect();
   return _client;
 }
 
-function db(dbName: string): Promise<Db> {
+export function getDb(dbName = 'vendly'): Promise<Db> {
   return getClient().then(c => c.db(dbName));
+}
+
+function db(dbName: string): Promise<Db> {
+  return getDb(dbName);
 }
 
 export const mongodbTools: Tool[] = [

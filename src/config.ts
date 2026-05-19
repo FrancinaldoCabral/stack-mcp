@@ -30,6 +30,9 @@ export const config = {
   },
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY ?? '',
-    embeddingModel: 'openai/text-embedding-3-small',
+    embeddingModel: process.env.OPENROUTER_EMBEDDING_MODEL ?? 'openai/text-embedding-3-small',
+  },
+  admin: {
+    apiKey: process.env.ADMIN_API_KEY ?? 'vendly-admin-dev',
   },
 };
