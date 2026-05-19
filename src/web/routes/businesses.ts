@@ -227,6 +227,31 @@ businessesRouter.post('/:id/add-instance', async (req, res) => {
       );
       instanceChatwootInboxId = inboxRes.data.id as number;
 
+      // Integração nativa Evolution → Chatwoot (sem autoCreate pois inbox já existe)
+      await axios.post(
+        `${config.evolution.url}/chatwoot/set/${iName}`,
+        {
+          enabled: true,
+          accountId: String(config.chatwoot.accountId),
+          token: config.chatwoot.apiKey,
+          url: config.chatwoot.url,
+          signMsg: false,
+          reopenConversation: true,
+          conversationPending: false,
+          nameInbox: iName,
+          mergeBrazilContacts: false,
+          importContacts: false,
+          importMessages: false,
+          daysLimitImportMessages: 0,
+          signDelimiter: '\n',
+          autoCreate: false,
+          organization: '',
+          logo: '',
+          ignoreJids: [],
+        },
+        { headers: { apikey: config.evolution.apiKey }, timeout: 12_000 },
+      );
+
       // Garantir webhook de conta Chatwoot → N8N (idempotente)
       const handoffUrl = `${config.n8n.url}/webhook/chatwoot-events`;
       try {
