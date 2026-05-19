@@ -22,8 +22,11 @@ const MONGO_URI = env.MONGODB_URI;
 const REDIS_HOST = env.REDIS_HOST;
 const REDIS_PORT = parseInt(env.REDIS_PORT ?? '6379', 10);
 const REDIS_PASS = env.REDIS_PASSWORD ?? '';
-const EVO_URL    = env.EVOLUTION_URL;
-const EVO_KEY    = env.EVOLUTION_API_KEY;
+const EVO_URL       = env.EVOLUTION_URL;
+const EVO_KEY       = env.EVOLUTION_API_KEY;
+const CHATWOOT_URL  = env.CHATWOOT_URL;
+const CHATWOOT_KEY  = env.CHATWOOT_API_KEY;
+const CHATWOOT_ACC  = env.CHATWOOT_ACCOUNT_ID?.replace(/\s*#.*/,'').trim() ?? '1';
 
 if (!MONGO_URI || !EVO_URL) {
   console.error('❌ MONGODB_URI ou EVOLUTION_URL não definidos no .env');
@@ -104,5 +107,60 @@ if (!Array.isArray(instances) || instances.length === 0) {
   }
 }
 console.log('✅ Evolution limpo\n');
+
+// ── Chatwoot ──────────────────────────────────────────────────────────────────
+if (CHATWOOT_URL && CHATWOOT_KEY) {
+  console.log('🔗 Buscando dados Chatwoot...');
+  const chatwootHeaders = { 'api_access_token': CHATWOOT_KEY, 'Content-Type': 'application/json' };
+
+  // Deletar todas as inboxes (cascata: deleta conversations associadas)
+  try {
+    const inboxRes = await fetch(`${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACC}/inboxes`, { headers: chatwootHeaders });
+    const inboxData = await inboxRes.json();
+    const inboxes = inboxData?.payload ?? [];
+    if (inboxes.length === 0) {
+      console.log('  ℹ️  Nenhuma inbox encontrada no Chatwoot');
+    } else {
+      for (const inbox of inboxes) {
+        const r = await fetch(`${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACC}/inboxes/${inbox.id}`, {
+          method: 'DELETE',
+          headers: chatwootHeaders,
+        });
+        console.log(`  🗑️  Inbox "${inbox.name}" (id=${inbox.id}) deletada (HTTP ${r.status})`);
+      }
+    }
+  } catch (e) {
+    console.log(`  ⚠️  Erro ao limpar inboxes Chatwoot: ${e.message}`);
+  }
+
+  // Deletar todos os contatos
+  try {
+    let page = 1;
+    let totalContacts = 0;
+    while (true) {
+      const cRes = await fetch(`${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACC}/contacts?page=${page}&include_contacts=true`, { headers: chatwootHeaders });
+      const cData = await cRes.json();
+      const contacts = cData?.payload?.length ? cData.payload : (Array.isArray(cData?.payload) ? cData.payload : null);
+      if (!contacts || contacts.length === 0) break;
+      for (const contact of contacts) {
+        await fetch(`${CHATWOOT_URL}/api/v1/accounts/${CHATWOOT_ACC}/contacts/${contact.id}`, {
+          method: 'DELETE',
+          headers: chatwootHeaders,
+        });
+        totalContacts++;
+      }
+      if (contacts.length < 15) break;
+      page++;
+    }
+    if (totalContacts > 0) console.log(`  🗑️  ${totalContacts} contatos deletados`);
+    else console.log('  ℹ️  Nenhum contato encontrado no Chatwoot');
+  } catch (e) {
+    console.log(`  ⚠️  Erro ao limpar contatos Chatwoot: ${e.message}`);
+  }
+
+  console.log('✅ Chatwoot limpo\n');
+} else {
+  console.log('⚠️  CHATWOOT_URL ou CHATWOOT_API_KEY não definidos — pulando Chatwoot\n');
+}
 
 console.log('🎉 Limpeza concluída! Base de dados pronta para teste do fluxo completo.');
