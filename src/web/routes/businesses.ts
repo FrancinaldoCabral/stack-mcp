@@ -213,7 +213,15 @@ businessesRouter.post('/:id/add-instance', async (req, res) => {
     // Webhook Evolution → N8N
     await axios.post(
       `${config.evolution.url}/webhook/set/${iName}`,
-      { url: `${config.n8n.url}/webhook/evolution`, webhook_by_events: false, webhook_base64: false, events: ['MESSAGES_UPSERT'] },
+      {
+        webhook: {
+          enabled: true,
+          url: `${config.n8n.url}/webhook/evolution`,
+          webhook_by_events: false,
+          webhook_base64: false,
+          events: ['MESSAGES_UPSERT'],
+        },
+      },
       { headers: { apikey: config.evolution.apiKey }, timeout: 10_000 },
     );
 
@@ -297,10 +305,13 @@ businessesRouter.post('/:id/provision', async (req, res) => {
     await axios.post(
       `${config.evolution.url}/webhook/set/${iName}`,
       {
-        url: `${config.n8n.url}/webhook/evolution`,
-        webhook_by_events: false,
-        webhook_base64: false,
-        events: ['MESSAGES_UPSERT'],
+        webhook: {
+          enabled: true,
+          url: `${config.n8n.url}/webhook/evolution`,
+          webhook_by_events: false,
+          webhook_base64: false,
+          events: ['MESSAGES_UPSERT'],
+        },
       },
       { headers: { apikey: config.evolution.apiKey } },
     );
