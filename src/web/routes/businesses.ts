@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { ObjectId } from 'mongodb';
+import axios from 'axios';
 import { getDb } from '../../tools/mongodb.js';
+import { config } from '../../config.js';
 
 export const businessesRouter = Router();
 
@@ -73,4 +75,92 @@ businessesRouter.delete('/:id', async (req, res) => {
     await db.collection('businesses').deleteOne({ _id: new ObjectId(req.params.id) });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// POST /api/businesses/:id/provision
+businessesRouter.post('/:id/provision', async (req, res) => {
+  try {
+    const { instanceName } = req.body as { instanceName?: string };
+    if (!instanceName?.trim()) return res.status(400).json({ error: 'instanceName é obrigatório' });
+
+    const db = await getDb();
+    const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
+    if (!business) return res.status(404).json({ error: 'Negócio não encontrado' });
+
+    const iName = instanceName.trim();
+    const inboxName = `${business.name} - WhatsApp`;
+
+    // 1. Criar inbox no Chatwoot
+    const chatwootInboxRes = await axios.post(
+      `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes`,
+      { name: inboxName, channel: { type: 'api', webhook_url: '' } },
+      { headers: { api_access_token: config.chatwoot.apiKey } },
+    );
+    const chatwootInboxId = chatwootInboxRes.data.id as number;
+
+    // 2. Criar instância Evolution com integração Chatwoot
+    await axios.post(
+      `${config.evolution.url}/instance/create`,
+      {
+        instanceName: iName,
+        qrcode: true,
+        integration: 'WHATSAPP-BAILEYS',
+        chatwootAccountId: config.chatwoot.accountId,
+        chatwootToken: config.chatwoot.apiKey,
+        chatwootUrl: config.chatwoot.url,
+        chatwootInboxId: String(chatwootInboxId),
+        chatwootSignMsg: false,
+        chatwootReopenConversation: true,
+        chatwootConversationPending: false,
+      },
+      { headers: { apikey: config.evolution.apiKey } },
+    );
+
+    // 3. Configurar webhook Evolution → N8N
+    await axios.post(
+      `${config.evolution.url}/webhook/set/${iName}`,
+      {
+        url: `${config.n8n.url}/webhook/evolution`,
+        webhook_by_events: false,
+        webhook_base64: false,
+        events: ['MESSAGES_UPSERT'],
+      },
+      { headers: { apikey: config.evolution.apiKey } },
+    );
+
+    // 4. Garantir webhook de conta no Chatwoot (idempotente)
+    const handoffWebhookUrl = `${config.n8n.url}/webhook/chatwoot-events`;
+    try {
+      const listRes = await axios.get(
+        `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/integrations/webhooks`,
+        { headers: { api_access_token: config.chatwoot.apiKey } },
+      );
+      const existing = (listRes.data?.payload ?? []) as { url: string }[];
+      const alreadySet = existing.some(w => w.url === handoffWebhookUrl);
+      if (!alreadySet) {
+        await axios.post(
+          `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/integrations/webhooks`,
+          { url: handoffWebhookUrl, subscriptions: ['message_created', 'conversation_status_changed'] },
+          { headers: { api_access_token: config.chatwoot.apiKey } },
+        );
+      }
+    } catch (_webhookErr) {
+      // webhook de conta é opcional — não falhar o provision por isso
+    }
+
+    // 5. Atualizar negócio no MongoDB
+    const existingInstances: string[] = (business.instances as string[]) ?? [];
+    const instances = Array.from(new Set([...existingInstances, iName]));
+    const updated = await db.collection('businesses').findOneAndUpdate(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { instances, chatwootInboxId, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+
+    res.json(updated);
+  } catch (e) {
+    const err = e as { response?: { data?: unknown }; message?: string };
+    const detail = err.response?.data ?? err.message ?? String(e);
+    res.status(500).json({ error: typeof detail === 'string' ? detail : JSON.stringify(detail) });
+  }
 });

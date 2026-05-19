@@ -34,6 +34,8 @@ export const api = {
   updateBusiness: (id: string, data: Partial<import('./types').Business>) =>
     req<import('./types').Business>(`/businesses/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteBusiness: (id: string) => req<{ ok: boolean }>(`/businesses/${id}`, { method: 'DELETE' }),
+  provisionBusiness: (id: string, data: { instanceName: string }) =>
+    req<import('./types').Business>(`/businesses/${id}/provision`, { method: 'POST', body: JSON.stringify(data) }),
 
   // Customers
   getCustomers: (params?: Record<string, string>) => {
