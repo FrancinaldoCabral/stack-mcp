@@ -1,9 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import {
-  Button, Table, Modal, Form, Input, Space,
-  Popconfirm, Tag, Typography, message, Tooltip, Badge, Spin, Result,
-} from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, LinkOutlined, MobileOutlined, QrcodeOutlined, MailOutlined, WarningOutlined } from '@ant-design/icons';
+import { Button, Table, Modal, Form, Input, Space, Typography, message, Spin, Result } from 'antd';
+import { PlusOutlined, EditOutlined, MessageOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { Business } from '../lib/types';
@@ -17,12 +14,13 @@ export default function Businesses() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Business | null>(null);
 
-  // Add WhatsApp instance modal state
+  // + WhatsApp modal
   const [addInstOpen, setAddInstOpen] = useState(false);
   const [addInstTarget, setAddInstTarget] = useState<Business | null>(null);
   const [addInstForm] = Form.useForm();
+  const connectAfterRef = useRef(false);
 
-  // QR modal state
+  // QR modal
   const [qrOpen, setQrOpen] = useState(false);
   const [qrBusiness, setQrBusiness] = useState<Business | null>(null);
   const [qrBase64, setQrBase64] = useState<string | null>(null);
@@ -31,67 +29,44 @@ export default function Businesses() {
   const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrStatusRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Send link modal state
-  const [linkOpen, setLinkOpen] = useState(false);
-  const [linkBusiness, setLinkBusiness] = useState<Business | null>(null);
-  const [linkForm] = Form.useForm();
-  const [linkResult, setLinkResult] = useState<string | null>(null);
-
-  // ── Mutations ───────────────────────────────────────────────────────────────────
+  // ── Mutations ────────────────────────────────────────────────────────────────
 
   const save = useMutation({
     mutationFn: (values: Partial<Business>) =>
       editing ? api.updateBusiness(editing._id, values) : api.createBusiness(values),
-    onSuccess: (created) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['businesses'] });
       setOpen(false);
-      if (!editing) {
-        message.success('Negócio criado!');
-      } else {
-        message.success('Salvo!');
-      }
+      message.success(editing ? 'Salvo!' : 'Negócio criado!');
     },
-    onError: (e: Error) => message.error(e.message),
-  });
-
-  const remove = useMutation({
-    mutationFn: (id: string) => api.deleteBusiness(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); message.success('Removido.'); },
     onError: (e: Error) => message.error(e.message),
   });
 
   const addInstance = useMutation({
     mutationFn: ({ id, instanceName }: { id: string; instanceName: string }) =>
       api.addInstance(id, { instanceName }),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       qc.invalidateQueries({ queryKey: ['businesses'] });
       setAddInstOpen(false);
       addInstForm.resetFields();
-      message.success('Instância adicionada! Clique em "Conectar" para escanear o QR.');
+      if (connectAfterRef.current) {
+        openQrModal(updated as Business);
+      } else {
+        message.success('Número adicionado!');
+      }
     },
     onError: (e: Error) => message.error(e.message),
   });
 
-  const retryChatwoot = useMutation({
-    mutationFn: (id: string) => api.retryChatwoot(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); message.success('Chatwoot configurado!'); },
-    onError: (e: Error) => message.error(e.message),
-  });
+  // ── QR helpers ───────────────────────────────────────────────────────────────
 
-  const sendLink = useMutation({
-    mutationFn: ({ id, email }: { id: string; email: string }) => api.sendQrLink(id, email),
-    onSuccess: (data) => { setLinkResult(data.connectUrl); message.success('E-mail enviado!'); },
-    onError: (e: Error) => message.error(e.message),
-  });
-
-  // QR helpers
   const fetchQr = async (id: string) => {
     setQrLoading(true);
     setQrBase64(null);
     try {
       const d = await api.getBusinessQr(id);
       setQrBase64(d.base64);
-    } catch { message.error('Não foi possível obter o QR code'); }
+    } catch { /* ignore */ }
     setQrLoading(false);
   };
 
@@ -131,19 +106,10 @@ export default function Businesses() {
     if (qrStatusRef.current) clearInterval(qrStatusRef.current);
   }, []);
 
-  const openLinkModal = (b: Business) => {
-    setLinkBusiness(b);
-    setLinkResult(null);
-    linkForm.resetFields();
-    setLinkOpen(true);
-  };
+  // ── Handlers ─────────────────────────────────────────────────────────────────
 
   const openCreate = () => { form.resetFields(); setEditing(null); setOpen(true); };
-  const openEdit = (b: Business) => {
-    form.setFieldsValue({ ...b, instances: b.instances?.join(', ') });
-    setEditing(b);
-    setOpen(true);
-  };
+  const openEdit = (b: Business) => { form.setFieldsValue(b); setEditing(b); setOpen(true); };
 
   const openAddInstance = (b: Business) => {
     setAddInstTarget(b);
@@ -151,71 +117,38 @@ export default function Businesses() {
     setAddInstOpen(true);
   };
 
-  const handleSubmit = () => {
-    form.validateFields().then(vals => save.mutate(vals));
-  };
-
-  const handleAddInstance = () => {
+  const submitAddInstance = (connectAfter: boolean) => {
     addInstForm.validateFields().then(vals => {
       if (!addInstTarget) return;
+      connectAfterRef.current = connectAfter;
       addInstance.mutate({ id: addInstTarget._id, instanceName: vals.instanceName });
     });
   };
 
+  // ── Table ────────────────────────────────────────────────────────────────────
+
   const cols = [
     { title: 'Nome', dataIndex: 'name', key: 'name' },
-    { title: 'WhatsApp', dataIndex: 'instances', key: 'instances',
-      render: (insts: string[]) => insts?.length
-        ? insts.map(i => <Tag key={i} color="green">{i}</Tag>)
-        : <span style={{ color: '#bbb', fontSize: 12 }}>nenhuma conta</span>
-    },
-    { title: 'Assistente', dataIndex: 'assistantName', key: 'assistantName' },
-    { title: 'Modelo', key: 'model', render: (_: unknown, b: Business) => <code style={{ fontSize: 11 }}>{b.settings?.model ?? '-'}</code> },
-    { title: 'Chatwoot', key: 'chatwoot',
-      render: (_: unknown, b: Business) => b.chatwootInboxId
-        ? <Tooltip title={`Inbox ID: ${b.chatwootInboxId}`}><Badge status="success" text="Configurado" /></Tooltip>
-        : <Badge status="warning" text="Pendente" />,
-    },
     {
       title: 'Ações', key: 'actions',
       render: (_: unknown, b: Business) => (
-        <Space wrap>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(b)}>Editar</Button>
-
-          {!b.chatwootInboxId && (
-            <Tooltip title="Chatwoot não configurado — clique para tentar novamente">
-              <Button size="small" icon={<WarningOutlined />} danger
-                loading={retryChatwoot.isPending}
-                onClick={() => retryChatwoot.mutate(b._id)}>
-                Reconectar Chatwoot
-              </Button>
-            </Tooltip>
-          )}
-
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(b)}>
+            Editar
+          </Button>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => openAddInstance(b)}>
+            + WhatsApp
+          </Button>
           {b.chatwootInboxId && (
-            <Button size="small" icon={<MobileOutlined />} type="primary" ghost
-              onClick={() => openAddInstance(b)}>
-              + WhatsApp
+            <Button
+              size="small"
+              icon={<MessageOutlined />}
+              href={`https://chatwoot.vendly.chat/app/accounts/1/inbox/${b.chatwootInboxId}`}
+              target="_blank"
+            >
+              Caixa de entrada
             </Button>
           )}
-
-          {b.instances?.length > 0 && (
-            <>
-              <Button size="small" icon={<QrcodeOutlined />} onClick={() => openQrModal(b)}>Conectar</Button>
-              <Button size="small" icon={<MailOutlined />} onClick={() => openLinkModal(b)}>Enviar link</Button>
-            </>
-          )}
-
-          {b.chatwootInboxId && (
-            <Tooltip title={`Inbox ${b.chatwootInboxId}`}>
-              <Button size="small" icon={<LinkOutlined />}
-                href="https://chatwoot.vendly.chat" target="_blank">Chatwoot</Button>
-            </Tooltip>
-          )}
-
-          <Popconfirm title="Remover negócio?" onConfirm={() => remove.mutate(b._id)}>
-            <Button size="small" danger icon={<DeleteOutlined />}>Remover</Button>
-          </Popconfirm>
         </Space>
       ),
     },
@@ -230,34 +163,35 @@ export default function Businesses() {
 
       <Table rowKey="_id" dataSource={data} columns={cols} loading={isLoading} pagination={{ pageSize: 20 }} />
 
-      {/* ── Criar / Editar negócio */}
+      {/* ── Criar / Editar */}
       <Modal
         title={editing ? 'Editar negócio' : 'Novo negócio'}
         open={open}
-        onOk={handleSubmit}
+        onOk={() => form.validateFields().then(vals => save.mutate(vals))}
         onCancel={() => setOpen(false)}
         confirmLoading={save.isPending}
         okText={editing ? 'Salvar' : 'Criar'}
-        width={600}
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Form.Item name="name" label="Nome" rules={[{ required: true }]}>
             <Input placeholder="Ex: Loja da Maria" />
           </Form.Item>
         </Form>
       </Modal>
 
-      {/* ── Adicionar conta WhatsApp */}
+      {/* ── + WhatsApp */}
       <Modal
-        title={`+ WhatsApp — ${addInstTarget?.name ?? ''}`}
+        title="+ WhatsApp"
         open={addInstOpen}
-        onOk={handleAddInstance}
         onCancel={() => setAddInstOpen(false)}
-        confirmLoading={addInstance.isPending}
-        okText="Criar e abrir QR"
-        width={440}
+        footer={[
+          <Button key="cancel" onClick={() => setAddInstOpen(false)}>Cancelar</Button>,
+          <Button key="create" loading={addInstance.isPending} onClick={() => submitAddInstance(false)}>Criar</Button>,
+          <Button key="connect" type="primary" loading={addInstance.isPending} onClick={() => submitAddInstance(true)}>Criar e conectar</Button>,
+        ]}
+        width={400}
       >
-        <Form form={addInstForm} layout="vertical">
+        <Form form={addInstForm} layout="vertical" style={{ marginTop: 8 }}>
           <Form.Item
             name="instanceName"
             label="Nome da instância"
@@ -265,16 +199,15 @@ export default function Businesses() {
               { required: true, message: 'Informe o nome' },
               { pattern: /^[a-z0-9-]+$/, message: 'Use apenas letras minúsculas, números e hífen' },
             ]}
-            extra="Identificador único e imutável. Ex: loja-maria"
           >
             <Input placeholder="loja-maria" />
           </Form.Item>
         </Form>
       </Modal>
 
-      {/* QR Code modal — admin escaneia diretamente */}
+      {/* ── QR Code */}
       <Modal
-        title={`Conectar WhatsApp — ${qrBusiness?.name ?? ''}`}
+        title="Conectar WhatsApp"
         open={qrOpen}
         onCancel={closeQrModal}
         footer={qrConnected ? null : [
@@ -283,57 +216,24 @@ export default function Businesses() {
           </Button>,
           <Button key="close" onClick={closeQrModal}>Fechar</Button>,
         ]}
-        width={400}
+        width={380}
       >
         {qrConnected ? (
-          <Result status="success" title="WhatsApp conectado!" subTitle="A instância está ativa e pronta para receber mensagens." />
+          <Result status="success" title="Conectado!" />
         ) : (
-          <div style={{ textAlign: 'center' }}>
+          <div style={{ textAlign: 'center', padding: '8px 0' }}>
             <div style={{ width: 280, height: 280, margin: '0 auto 16px', background: '#f9f9f9', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #f0f0f0' }}>
-              {qrLoading ? <Spin size="large" /> : qrBase64
-                ? <img src={qrBase64} alt="QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 10 }} />
-                : <span style={{ color: '#bbb', fontSize: 13 }}>QR indisponível</span>
+              {qrLoading
+                ? <Spin size="large" />
+                : qrBase64
+                  ? <img src={qrBase64} alt="QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 10 }} />
+                  : <span style={{ color: '#bbb', fontSize: 13 }}>QR indisponível</span>
               }
             </div>
-            <p style={{ color: '#666', fontSize: 13, marginBottom: 8 }}>
-              Abra o WhatsApp → <strong>Configurações → Dispositivos conectados → Conectar dispositivo</strong>
-            </p>
-            <p style={{ color: '#999', fontSize: 12 }}>QR atualiza automaticamente a cada 30s</p>
-          </div>
-        )}
-      </Modal>
-
-      {/* Enviar link modal — gera link seguro e envia por e-mail */}
-      <Modal
-        title={`Enviar link de conexão — ${linkBusiness?.name ?? ''}`}
-        open={linkOpen}
-        onCancel={() => { setLinkOpen(false); setLinkResult(null); }}
-        footer={linkResult ? [<Button key="close" type="primary" onClick={() => { setLinkOpen(false); setLinkResult(null); }}>Fechar</Button>] : null}
-        width={480}
-      >
-        {linkResult ? (
-          <div>
-            <Result status="success" title="E-mail enviado!" subTitle="O link de conexão foi enviado para o destinatário." />
-            <p style={{ fontSize: 12, color: '#999', wordBreak: 'break-all', textAlign: 'center' }}>
-              Link (válido 24h): <a href={linkResult} target="_blank" rel="noreferrer">{linkResult}</a>
+            <p style={{ color: '#666', fontSize: 13 }}>
+              Abra o WhatsApp → <strong>Dispositivos conectados → Conectar dispositivo</strong>
             </p>
           </div>
-        ) : (
-          <>
-            <p style={{ marginBottom: 16, color: '#666' }}>
-              Gera um link seguro com QR code e envia por e-mail. O link expira em <strong>24 horas</strong>.
-            </p>
-            <Form form={linkForm} layout="vertical" onFinish={vals => linkBusiness && sendLink.mutate({ id: linkBusiness._id, email: vals.email })}>
-              <Form.Item name="email" label="E-mail do destinatário" rules={[{ required: true, type: 'email', message: 'E-mail inválido' }]}>
-                <Input placeholder="cliente@exemplo.com" />
-              </Form.Item>
-              <Form.Item style={{ marginBottom: 0 }}>
-                <Button type="primary" htmlType="submit" loading={sendLink.isPending} block>
-                  Enviar link por e-mail
-                </Button>
-              </Form.Item>
-            </Form>
-          </>
         )}
       </Modal>
     </>
