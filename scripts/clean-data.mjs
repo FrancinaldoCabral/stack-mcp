@@ -33,56 +33,53 @@ if (!MONGO_URI || !EVO_URL) {
 // ── MongoDB ──────────────────────────────────────────────────────────────────
 import { MongoClient } from 'mongodb';
 
-if (!MONGO_URI.startsWith('mongodb://localhost') && !MONGO_URI.startsWith('mongodb+srv://')) {
-  console.log('⚠️  MongoDB interno (Coolify) — não acessível de localhost. Pulando limpeza MongoDB.');
-  console.log('   Use o botão "Remover" no dashboard ou rode este script dentro do servidor.\n');
-} else {
-  console.log('🔗 Conectando ao MongoDB...');
-  try {
-    const client = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 8000 });
-    await client.connect();
-    const db = client.db();
-    const collections = ['businesses', 'customers', 'conversations', 'knowledgePoints', 'knowledge'];
-    for (const col of collections) {
-      const result = await db.collection(col).deleteMany({});
-      console.log(`  🗑️  ${col}: ${result.deletedCount} documentos removidos`);
-    }
-    await client.close();
-    console.log('✅ MongoDB limpo\n');
-  } catch (e) {
-    console.log(`⚠️  MongoDB inacessível: ${e.message}\n`);
+// Se o URI usa hostname interno Coolify, substituir pelo IP público (mesmo servidor, porta 5439)
+const mongoCredsMatch = MONGO_URI.match(/mongodb:\/\/([^@]+@)/);
+const mongoCreds = mongoCredsMatch ? mongoCredsMatch[1] : '';
+const publicMongoUri = REDIS_HOST
+  ? `mongodb://${mongoCreds}${REDIS_HOST}:5439/?directConnection=true`
+  : MONGO_URI;
+
+console.log('🔗 Conectando ao MongoDB...');
+try {
+  const client = new MongoClient(publicMongoUri, { serverSelectionTimeoutMS: 8000 });
+  await client.connect();
+  const db = client.db();
+  const collections = ['businesses', 'customers', 'conversations', 'knowledgePoints', 'knowledge'];
+  for (const col of collections) {
+    const result = await db.collection(col).deleteMany({});
+    console.log(`  🗑️  ${col}: ${result.deletedCount} documentos removidos`);
   }
+  await client.close();
+  console.log('✅ MongoDB limpo\n');
+} catch (e) {
+  console.log(`⚠️  MongoDB inacessível (${publicMongoUri.replace(/:[^:@]+@/, ':***@')}): ${e.message}\n`);
 }
 
 // ── Redis ─────────────────────────────────────────────────────────────────────
 import { Redis } from 'ioredis';
 
-const redisHost = REDIS_HOST ?? '';
-if (!redisHost || redisHost.includes('sslip.io') || (!redisHost.includes('localhost') && !redisHost.includes('127.0.0.1'))) {
-  console.log('⚠️  Redis interno (Coolify) — não acessível de localhost. Pulando limpeza Redis.');
-  console.log('   As sessões expiram automaticamente (TTL 30 dias).\n');
-} else {
-  console.log('🔗 Conectando ao Redis...');
-  try {
-    const redis = new Redis({ host: redisHost, port: REDIS_PORT, password: REDIS_PASS, lazyConnect: true, connectTimeout: 8000 });
-    const patterns = ['sessao:*', 'handoff:*', 'debounce_ts:*', 'buffer:*', 'qr_link:*'];
-    let redisTotal = 0;
-    for (const pattern of patterns) {
-      let cursor = '0';
-      const keys = [];
-      do {
-        const [next, found] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
-        cursor = next;
-        keys.push(...found);
-      } while (cursor !== '0');
-      if (keys.length > 0) { await redis.del(...keys); redisTotal += keys.length; console.log(`  🗑️  ${pattern}: ${keys.length} chaves`); }
-    }
-    if (redisTotal === 0) console.log('  ℹ️  Nenhuma chave encontrada');
-    await redis.quit();
-    console.log('✅ Redis limpo\n');
-  } catch (e) {
-    console.log(`⚠️  Redis inacessível: ${e.message}\n`);
+console.log('🔗 Conectando ao Redis...');
+try {
+  const redis = new Redis({ host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASS, lazyConnect: true, connectTimeout: 8000 });
+  await redis.connect();
+  const patterns = ['sessao:*', 'handoff:*', 'debounce_ts:*', 'buffer:*', 'qr_link:*'];
+  let redisTotal = 0;
+  for (const pattern of patterns) {
+    let cursor = '0';
+    const keys = [];
+    do {
+      const [next, found] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = next;
+      keys.push(...found);
+    } while (cursor !== '0');
+    if (keys.length > 0) { await redis.del(...keys); redisTotal += keys.length; console.log(`  🗑️  ${pattern}: ${keys.length} chaves`); }
   }
+  if (redisTotal === 0) console.log('  ℹ️  Nenhuma chave encontrada');
+  await redis.quit();
+  console.log('✅ Redis limpo\n');
+} catch (e) {
+  console.log(`⚠️  Redis inacessível: ${e.message}\n`);
 }
 
 // ── Evolution ─────────────────────────────────────────────────────────────────

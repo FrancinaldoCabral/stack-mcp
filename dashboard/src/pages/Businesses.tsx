@@ -20,6 +20,7 @@ export default function Businesses() {
   const [editing, setEditing] = useState<Business | null>(null);
   const [provisionOpen, setProvisionOpen] = useState(false);
   const [provisionTarget, setProvisionTarget] = useState<Business | null>(null);
+  const [creating, setCreating] = useState(false); // true = creating new (shows instanceName field)
 
   // QR modal state
   const [qrOpen, setQrOpen] = useState(false);
@@ -39,7 +40,27 @@ export default function Businesses() {
   const save = useMutation({
     mutationFn: (values: Partial<Business>) =>
       editing ? api.updateBusiness(editing._id, values) : api.createBusiness(values),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); setOpen(false); message.success('Salvo!'); },
+    onSuccess: async (created, values) => {
+      qc.invalidateQueries({ queryKey: ['businesses'] });
+      setOpen(false);
+      // If creating with an instanceName, auto-provision then open QR
+      if (!editing && (values as { instanceName?: string }).instanceName) {
+        const instanceName = (values as { instanceName?: string }).instanceName!;
+        const bizId = (created as Business)._id;
+        try {
+          await api.provisionBusiness(bizId, { instanceName });
+          qc.invalidateQueries({ queryKey: ['businesses'] });
+          message.success('Negócio criado e provisionado! Escaneie o QR para conectar.');
+          // Fetch the fresh business and open QR
+          const fresh = await api.getBusiness(bizId);
+          openQrModal(fresh);
+        } catch (e: unknown) {
+          message.warning('Negócio criado, mas falha ao provisionar: ' + (e as Error).message);
+        }
+      } else {
+        message.success('Salvo!');
+      }
+    },
     onError: (e: Error) => message.error(e.message),
   });
 
@@ -52,10 +73,13 @@ export default function Businesses() {
   const provision = useMutation({
     mutationFn: ({ id, instanceName }: { id: string; instanceName: string }) =>
       api.provisionBusiness(id, { instanceName }),
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['businesses'] });
       setProvisionOpen(false);
-      message.success('Provisionado! Instância Evolution e inbox Chatwoot criados.');
+      message.success('Provisionado!');
+      // Open QR modal for the provisioned business
+      const biz = data.find(b => b._id === vars.id);
+      if (biz) openQrModal({ ...biz, instances: [vars.instanceName] });
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -120,10 +144,11 @@ export default function Businesses() {
     setLinkOpen(true);
   };
 
-  const openCreate = () => { form.resetFields(); setEditing(null); setOpen(true); };
+  const openCreate = () => { form.resetFields(); setEditing(null); setCreating(true); setOpen(true); };
   const openEdit = (b: Business) => {
     form.setFieldsValue({ ...b, instances: b.instances?.join(', ') });
     setEditing(b);
+    setCreating(false);
     setOpen(true);
   };
   const openProvision = (b: Business) => {
@@ -134,9 +159,11 @@ export default function Businesses() {
 
   const handleSubmit = () => {
     form.validateFields().then(vals => {
+      const { instanceName, ...rest } = vals as { instanceName?: string; [k: string]: unknown };
       const payload = {
-        ...vals,
-        instances: String(vals.instances ?? '').split(',').map((s: string) => s.trim()).filter(Boolean),
+        ...rest,
+        instances: instanceName ? [instanceName] : String(rest.instances ?? '').split(',').map((s: string) => s.trim()).filter(Boolean),
+        instanceName, // pass through so onSuccess can read it
       };
       save.mutate(payload);
     });
@@ -199,15 +226,31 @@ export default function Businesses() {
         onOk={handleSubmit}
         onCancel={() => setOpen(false)}
         confirmLoading={save.isPending}
+        okText={creating ? 'Criar e Provisionar' : 'Salvar'}
         width={600}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item name="name" label="Nome" rules={[{ required: true }]}>
             <Input placeholder="Ex: Loja da Maria" />
           </Form.Item>
-          <Form.Item name="instances" label="Instâncias Evolution (separadas por vírgula)">
-            <Input placeholder="Ex: loja-maria, loja-maria-vendas" />
-          </Form.Item>
+          {creating && (
+            <Form.Item
+              name="instanceName"
+              label="Nome da instância WhatsApp"
+              rules={[
+                { required: true, message: 'Informe o nome da instância' },
+                { pattern: /^[a-z0-9-]+$/, message: 'Use apenas letras minúsculas, números e hífen' },
+              ]}
+              extra="Identificador único da instância Evolution. Ex: loja-maria"
+            >
+              <Input placeholder="loja-maria" />
+            </Form.Item>
+          )}
+          {!creating && (
+            <Form.Item name="instances" label="Instâncias Evolution (separadas por vírgula)">
+              <Input placeholder="Ex: loja-maria, loja-maria-vendas" />
+            </Form.Item>
+          )}
           <Form.Item name="assistantName" label="Nome do assistente">
             <Input placeholder="Assistente" />
           </Form.Item>
