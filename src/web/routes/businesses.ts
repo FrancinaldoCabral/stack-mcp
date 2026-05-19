@@ -82,12 +82,7 @@ businessesRouter.post('/', async (req, res) => {
     };
     const result = await db.collection('businesses').insertOne(doc);
     const bizId = result.insertedId;
-
-    // Auto-provisionar Chatwoot (falha silenciosa — mostra aviso no dashboard)
-    let chatwootInboxId: number | undefined;
-    try { chatwootInboxId = await provisionChatwoot(bizId, doc.name, db); } catch (_) {}
-
-    res.status(201).json({ ...doc, _id: bizId, ...(chatwootInboxId ? { chatwootInboxId } : {}) });
+    res.status(201).json({ ...doc, _id: bizId });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
@@ -129,11 +124,15 @@ businessesRouter.delete('/:id', async (req, res) => {
       } catch (_) { /* ignora erro — instância pode não existir mais */ }
     }
 
-    // 2. Deletar inbox Chatwoot
-    if (business.chatwootInboxId) {
+    // 2. Deletar inboxes Chatwoot (uma por instância)
+    const instanceInboxes: Record<string, number> = (business.instanceInboxes as Record<string, number>) ?? {};
+    const inboxIdsToDelete = new Set(Object.values(instanceInboxes));
+    // Compatibilidade com campo legado chatwootInboxId
+    if (business.chatwootInboxId) inboxIdsToDelete.add(business.chatwootInboxId as number);
+    for (const inboxId of inboxIdsToDelete) {
       try {
         await axios.delete(
-          `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes/${business.chatwootInboxId}`,
+          `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes/${inboxId}`,
           { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 10_000 },
         );
       } catch (_) { /* ignora */ }
@@ -218,11 +217,42 @@ businessesRouter.post('/:id/add-instance', async (req, res) => {
       { headers: { apikey: config.evolution.apiKey }, timeout: 10_000 },
     );
 
+    // Criar inbox Chatwoot para esta instância específica
+    let instanceChatwootInboxId: number | undefined;
+    try {
+      const inboxRes = await axios.post(
+        `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes`,
+        { name: iName, channel: { type: 'api', webhook_url: '' } },
+        { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 12_000 },
+      );
+      instanceChatwootInboxId = inboxRes.data.id as number;
+
+      // Garantir webhook de conta Chatwoot → N8N (idempotente)
+      const handoffUrl = `${config.n8n.url}/webhook/chatwoot-events`;
+      try {
+        const listRes = await axios.get(
+          `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/integrations/webhooks`,
+          { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 8_000 },
+        );
+        const existing = (listRes.data?.payload ?? []) as { url: string }[];
+        if (!existing.some(w => w.url === handoffUrl)) {
+          await axios.post(
+            `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/integrations/webhooks`,
+            { url: handoffUrl, subscriptions: ['message_created', 'conversation_status_changed'] },
+            { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 8_000 },
+          );
+        }
+      } catch (_) { /* webhook opcional */ }
+    } catch (_) { /* Chatwoot falha silenciosa */ }
+
     const existingInstances: string[] = (business.instances as string[]) ?? [];
     const instances = Array.from(new Set([...existingInstances, iName]));
+    const existingInboxes: Record<string, number> = (business.instanceInboxes as Record<string, number>) ?? {};
+    if (instanceChatwootInboxId) existingInboxes[iName] = instanceChatwootInboxId;
+
     const updated = await db.collection('businesses').findOneAndUpdate(
       { _id: new ObjectId(req.params.id) },
-      { $set: { instances, updatedAt: new Date() } },
+      { $set: { instances, instanceInboxes: existingInboxes, updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
     res.json(updated);

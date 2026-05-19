@@ -11,7 +11,7 @@ export interface Business {
     maxHistoryTokens: number;
     tools: { searchMemory: boolean };
   };
-  chatwootInboxId?: number;
+  instanceInboxes?: Record<string, number>;
   createdAt: string;
   updatedAt: string;
 }

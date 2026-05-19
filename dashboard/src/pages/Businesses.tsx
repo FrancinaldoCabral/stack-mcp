@@ -153,16 +153,17 @@ export default function Businesses() {
           <Button size="small" icon={<PlusOutlined />} onClick={() => openAddInstance(b)}>
             + WhatsApp
           </Button>
-          {b.chatwootInboxId && (
+          {Object.entries(b.instanceInboxes ?? {}).map(([instName, inboxId]) => (
             <Button
+              key={instName}
               size="small"
               icon={<MessageOutlined />}
-              href={`https://chatwoot.vendly.chat/app/accounts/1/inbox/${b.chatwootInboxId}`}
+              href={`https://chatwoot.vendly.chat/app/accounts/1/inbox/${inboxId}`}
               target="_blank"
             >
-              Caixa de entrada
+              {Object.keys(b.instanceInboxes ?? {}).length > 1 ? `Caixa: ${instName}` : 'Caixa de entrada'}
             </Button>
-          )}
+          ))}
           <Button
             size="small"
             danger
