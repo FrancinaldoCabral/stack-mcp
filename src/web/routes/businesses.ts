@@ -111,11 +111,59 @@ businessesRouter.put('/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
-// DELETE /api/businesses/:id
+// DELETE /api/businesses/:id — remove negócio + Evolution + Chatwoot + dados relacionados
 businessesRouter.delete('/:id', async (req, res) => {
   try {
     const db = await getDb();
-    await db.collection('businesses').deleteOne({ _id: new ObjectId(req.params.id) });
+    const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
+    if (!business) return res.status(404).json({ error: 'Not found' });
+
+    // 1. Deletar instâncias Evolution
+    const instances: string[] = (business.instances as string[]) ?? [];
+    for (const iName of instances) {
+      try {
+        await axios.delete(`${config.evolution.url}/instance/delete/${iName}`, {
+          headers: { apikey: config.evolution.apiKey },
+          timeout: 10_000,
+        });
+      } catch (_) { /* ignora erro — instância pode não existir mais */ }
+    }
+
+    // 2. Deletar inbox Chatwoot
+    if (business.chatwootInboxId) {
+      try {
+        await axios.delete(
+          `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes/${business.chatwootInboxId}`,
+          { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 10_000 },
+        );
+      } catch (_) { /* ignora */ }
+    }
+
+    // 3. Limpar dados relacionados no MongoDB
+    const bizId = new ObjectId(req.params.id);
+    await Promise.all([
+      db.collection('conversations').deleteMany({ businessId: bizId }),
+      db.collection('customers').deleteMany({ businessId: bizId }),
+    ]);
+
+    // 4. Deletar Redis (sessões, buffers, debounce)
+    try {
+      const redis = await getRedis();
+      const patterns = instances.flatMap(i => [
+        `sessao:${i}:*`, `buffer:${i}:*`, `debounce_ts:${i}:*`,
+      ]);
+      for (const pattern of patterns) {
+        let cursor = '0';
+        do {
+          const [next, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+          cursor = next;
+          if (keys.length) await redis.del(...keys);
+        } while (cursor !== '0');
+      }
+    } catch (_) { /* Redis opcional */ }
+
+    // 5. Deletar o negócio
+    await db.collection('businesses').deleteOne({ _id: bizId });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });

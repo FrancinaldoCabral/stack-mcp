@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Button, Table, Modal, Form, Input, Space, Typography, message, Spin, Result } from 'antd';
-import { PlusOutlined, EditOutlined, MessageOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, MessageOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { Business } from '../lib/types';
@@ -20,6 +20,10 @@ export default function Businesses() {
   const [addInstForm] = Form.useForm();
   const connectAfterRef = useRef(false);
 
+  // Excluir
+  const [deleteTarget, setDeleteTarget] = useState<Business | null>(null);
+  const [deleteInput, setDeleteInput] = useState('');
+
   // QR modal
   const [qrOpen, setQrOpen] = useState(false);
   const [qrBusiness, setQrBusiness] = useState<Business | null>(null);
@@ -38,6 +42,16 @@ export default function Businesses() {
       qc.invalidateQueries({ queryKey: ['businesses'] });
       setOpen(false);
       message.success(editing ? 'Salvo!' : 'Negócio criado!');
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const deleteBiz = useMutation({
+    mutationFn: (id: string) => api.deleteBusiness(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['businesses'] });
+      setDeleteTarget(null);
+      message.success('Negócio removido.');
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -130,7 +144,7 @@ export default function Businesses() {
   const cols = [
     { title: 'Nome', dataIndex: 'name', key: 'name' },
     {
-      title: 'Ações', key: 'actions',
+      title: 'Ações', key: 'actions', align: 'right' as const,
       render: (_: unknown, b: Business) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(b)}>
@@ -149,6 +163,14 @@ export default function Businesses() {
               Caixa de entrada
             </Button>
           )}
+          <Button
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => { setDeleteTarget(b); setDeleteInput(''); }}
+          >
+            Excluir
+          </Button>
         </Space>
       ),
     },
@@ -203,6 +225,26 @@ export default function Businesses() {
             <Input placeholder="loja-maria" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ── Excluir negócio */}
+      <Modal
+        title="Excluir negócio"
+        open={!!deleteTarget}
+        onCancel={() => setDeleteTarget(null)}
+        okText="Excluir"
+        okButtonProps={{ danger: true, disabled: deleteInput !== deleteTarget?.name, loading: deleteBiz.isPending }}
+        onOk={() => deleteTarget && deleteBiz.mutate(deleteTarget._id)}
+        cancelText="Cancelar"
+      >
+        <p>Esta ação é irreversível. Serão removidos: instâncias WhatsApp, caixa de entrada, conversas e clientes deste negócio.</p>
+        <p>Digite <strong>{deleteTarget?.name}</strong> para confirmar:</p>
+        <Input
+          value={deleteInput}
+          onChange={e => setDeleteInput(e.target.value)}
+          placeholder={deleteTarget?.name}
+          onPressEnter={() => deleteInput === deleteTarget?.name && deleteTarget && deleteBiz.mutate(deleteTarget._id)}
+        />
       </Modal>
 
       {/* ── QR Code */}

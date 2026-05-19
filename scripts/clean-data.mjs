@@ -87,24 +87,35 @@ try {
 
 // ── Evolution ─────────────────────────────────────────────────────────────────
 console.log('🔗 Buscando instâncias Evolution...');
-const listRes = await fetch(`${EVO_URL}/instance/fetchInstances`, {
-  headers: { apikey: EVO_KEY },
-});
-const instances = await listRes.json();
+try {
+  const listRes = await fetch(`${EVO_URL}/instance/fetchInstances`, {
+    headers: { apikey: EVO_KEY },
+  });
+  const raw = await listRes.json();
 
-if (!Array.isArray(instances) || instances.length === 0) {
-  console.log('  ℹ️  Nenhuma instância encontrada no Evolution');
-} else {
-  for (const inst of instances) {
-    const name = inst.instance?.instanceName ?? inst.instanceName;
-    if (!name) continue;
-    const r = await fetch(`${EVO_URL}/instance/delete/${name}`, {
-      method: 'DELETE',
-      headers: { apikey: EVO_KEY },
-    });
-    const status = r.status;
-    console.log(`  🗑️  Instância "${name}" deletada (HTTP ${status})`);
+  // A API pode retornar array direto ou { data: [...] } ou { instances: [...] }
+  const instances = Array.isArray(raw) ? raw
+    : Array.isArray(raw?.data) ? raw.data
+    : Array.isArray(raw?.instances) ? raw.instances
+    : [];
+
+  console.log(`  📋 Resposta Evolution: ${JSON.stringify(raw).slice(0, 200)}`);
+
+  if (instances.length === 0) {
+    console.log('  ℹ️  Nenhuma instância encontrada no Evolution');
+  } else {
+    for (const inst of instances) {
+      const name = inst.instance?.instanceName ?? inst.instanceName ?? inst.name;
+      if (!name) { console.log('  ⚠️  Instância sem nome:', JSON.stringify(inst)); continue; }
+      const r = await fetch(`${EVO_URL}/instance/delete/${name}`, {
+        method: 'DELETE',
+        headers: { apikey: EVO_KEY },
+      });
+      console.log(`  🗑️  Instância "${name}" deletada (HTTP ${r.status})`);
+    }
   }
+} catch (e) {
+  console.log(`  ⚠️  Erro ao limpar Evolution: ${e.message}`);
 }
 console.log('✅ Evolution limpo\n');
 
