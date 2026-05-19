@@ -44,7 +44,7 @@ console.log('🔗 Conectando ao MongoDB...');
 try {
   const client = new MongoClient(publicMongoUri, { serverSelectionTimeoutMS: 8000 });
   await client.connect();
-  const db = client.db();
+  const db = client.db('vendly');
   const collections = ['businesses', 'customers', 'conversations', 'knowledgePoints', 'knowledge'];
   for (const col of collections) {
     const result = await db.collection(col).deleteMany({});

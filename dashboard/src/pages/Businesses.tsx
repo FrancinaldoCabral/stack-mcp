@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import {
-  Button, Table, Modal, Form, Input, Select, Space,
+  Button, Table, Modal, Form, Input, Space,
   Popconfirm, Tag, Typography, message, Tooltip, Badge, Spin, Result,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, LinkOutlined, MobileOutlined, QrcodeOutlined, MailOutlined, WarningOutlined } from '@ant-design/icons';
@@ -9,7 +9,6 @@ import { api } from '../lib/api';
 import type { Business } from '../lib/types';
 
 const { Title } = Typography;
-const { TextArea } = Input;
 
 export default function Businesses() {
   const qc = useQueryClient();
@@ -47,12 +46,7 @@ export default function Businesses() {
       qc.invalidateQueries({ queryKey: ['businesses'] });
       setOpen(false);
       if (!editing) {
-        const biz = created as Business;
-        if (biz.chatwootInboxId) {
-          message.success('Negócio criado e conectado ao Chatwoot!');
-        } else {
-          message.warning('Negócio criado, mas Chatwoot não pôde ser configurado. Use "⚠️ Reconectar" para tentar novamente.');
-        }
+        message.success('Negócio criado!');
       } else {
         message.success('Salvo!');
       }
@@ -159,13 +153,7 @@ export default function Businesses() {
   };
 
   const handleSubmit = () => {
-    form.validateFields().then(vals => {
-      const payload = {
-        ...vals,
-        instances: String(vals.instances ?? '').split(',').map((s: string) => s.trim()).filter(Boolean),
-      };
-      save.mutate(payload);
-    });
+    form.validateFields().then(vals => save.mutate(vals));
   };
 
   const handleAddInstance = () => {
@@ -253,27 +241,9 @@ export default function Businesses() {
         okText={editing ? 'Salvar' : 'Criar'}
         width={600}
       >
-        {!editing && (
-          <p style={{ color: '#52c41a', marginBottom: 12, fontSize: 13 }}>
-            ℹ️ O Chatwoot será configurado automaticamente. Depois use "+ WhatsApp" para adicionar uma conta.
-          </p>
-        )}
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="Nome" rules={[{ required: true }]}>
             <Input placeholder="Ex: Loja da Maria" />
-          </Form.Item>
-          <Form.Item name="assistantName" label="Nome do assistente">
-            <Input placeholder="Assistente" />
-          </Form.Item>
-          <Form.Item name={['settings', 'model']} label="Modelo LLM">
-            <Select options={[
-              { value: 'google/gemini-2.5-flash-preview', label: 'Gemini 2.5 Flash (recomendado)' },
-              { value: 'google/gemini-2.0-flash-lite-001', label: 'Gemini 2.0 Flash Lite' },
-              { value: 'meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (gratuito)' },
-            ]} defaultValue="google/gemini-2.5-flash-preview" />
-          </Form.Item>
-          <Form.Item name="systemPrompt" label="System Prompt">
-            <TextArea rows={4} placeholder="Descreva o papel e personalidade do assistente..." />
           </Form.Item>
         </Form>
       </Modal>
@@ -288,9 +258,6 @@ export default function Businesses() {
         okText="Criar e abrir QR"
         width={440}
       >
-        <p style={{ color: '#666', marginBottom: 16 }}>
-          Cria uma instância WhatsApp integrada ao Chatwoot. O QR code será exibido em seguida.
-        </p>
         <Form form={addInstForm} layout="vertical">
           <Form.Item
             name="instanceName"
