@@ -3,7 +3,7 @@ import {
   Button, Table, Modal, Form, Input, Select, Space,
   Popconfirm, Tag, Typography, message, Tooltip, Badge, Spin, Result,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, LinkOutlined, ToolOutlined, QrcodeOutlined, MailOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, LinkOutlined, MobileOutlined, QrcodeOutlined, MailOutlined, WarningOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { Business } from '../lib/types';
@@ -15,12 +15,13 @@ export default function Businesses() {
   const qc = useQueryClient();
   const { data = [], isLoading } = useQuery({ queryKey: ['businesses'], queryFn: api.getBusinesses });
   const [form] = Form.useForm();
-  const [provisionForm] = Form.useForm();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Business | null>(null);
-  const [provisionOpen, setProvisionOpen] = useState(false);
-  const [provisionTarget, setProvisionTarget] = useState<Business | null>(null);
-  const [creating, setCreating] = useState(false); // true = creating new (shows instanceName field)
+
+  // Add WhatsApp instance modal state
+  const [addInstOpen, setAddInstOpen] = useState(false);
+  const [addInstTarget, setAddInstTarget] = useState<Business | null>(null);
+  const [addInstForm] = Form.useForm();
 
   // QR modal state
   const [qrOpen, setQrOpen] = useState(false);
@@ -37,25 +38,20 @@ export default function Businesses() {
   const [linkForm] = Form.useForm();
   const [linkResult, setLinkResult] = useState<string | null>(null);
 
+  // ── Mutations ───────────────────────────────────────────────────────────────────
+
   const save = useMutation({
     mutationFn: (values: Partial<Business>) =>
       editing ? api.updateBusiness(editing._id, values) : api.createBusiness(values),
-    onSuccess: async (created, values) => {
+    onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['businesses'] });
       setOpen(false);
-      // If creating with an instanceName, auto-provision then open QR
-      if (!editing && (values as { instanceName?: string }).instanceName) {
-        const instanceName = (values as { instanceName?: string }).instanceName!;
-        const bizId = (created as Business)._id;
-        try {
-          await api.provisionBusiness(bizId, { instanceName });
-          qc.invalidateQueries({ queryKey: ['businesses'] });
-          message.success('Negócio criado e provisionado! Escaneie o QR para conectar.');
-          // Fetch the fresh business and open QR
-          const fresh = await api.getBusiness(bizId);
-          openQrModal(fresh);
-        } catch (e: unknown) {
-          message.warning('Negócio criado, mas falha ao provisionar: ' + (e as Error).message);
+      if (!editing) {
+        const biz = created as Business;
+        if (biz.chatwootInboxId) {
+          message.success('Negócio criado e conectado ao Chatwoot!');
+        } else {
+          message.warning('Negócio criado, mas Chatwoot não pôde ser configurado. Use "⚠️ Reconectar" para tentar novamente.');
         }
       } else {
         message.success('Salvo!');
@@ -70,17 +66,22 @@ export default function Businesses() {
     onError: (e: Error) => message.error(e.message),
   });
 
-  const provision = useMutation({
+  const addInstance = useMutation({
     mutationFn: ({ id, instanceName }: { id: string; instanceName: string }) =>
-      api.provisionBusiness(id, { instanceName }),
-    onSuccess: (_, vars) => {
+      api.addInstance(id, { instanceName }),
+    onSuccess: (updated, vars) => {
       qc.invalidateQueries({ queryKey: ['businesses'] });
-      setProvisionOpen(false);
-      message.success('Provisionado!');
-      // Open QR modal for the provisioned business
-      const biz = data.find(b => b._id === vars.id);
-      if (biz) openQrModal({ ...biz, instances: [vars.instanceName] });
+      setAddInstOpen(false);
+      addInstForm.resetFields();
+      message.success('Instância criada! Escaneie o QR code para conectar o WhatsApp.');
+      openQrModal({ ...(updated as Business), instances: [...((updated as Business).instances ?? []), vars.instanceName] });
     },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const retryChatwoot = useMutation({
+    mutationFn: (id: string) => api.retryChatwoot(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); message.success('Chatwoot configurado!'); },
     onError: (e: Error) => message.error(e.message),
   });
 
@@ -144,65 +145,87 @@ export default function Businesses() {
     setLinkOpen(true);
   };
 
-  const openCreate = () => { form.resetFields(); setEditing(null); setCreating(true); setOpen(true); };
+  const openCreate = () => { form.resetFields(); setEditing(null); setOpen(true); };
   const openEdit = (b: Business) => {
     form.setFieldsValue({ ...b, instances: b.instances?.join(', ') });
     setEditing(b);
-    setCreating(false);
     setOpen(true);
   };
-  const openProvision = (b: Business) => {
-    provisionForm.resetFields();
-    setProvisionTarget(b);
-    setProvisionOpen(true);
+
+  const openAddInstance = (b: Business) => {
+    setAddInstTarget(b);
+    addInstForm.resetFields();
+    setAddInstOpen(true);
   };
 
   const handleSubmit = () => {
     form.validateFields().then(vals => {
-      const { instanceName, ...rest } = vals as { instanceName?: string; [k: string]: unknown };
       const payload = {
-        ...rest,
-        instances: instanceName ? [instanceName] : String(rest.instances ?? '').split(',').map((s: string) => s.trim()).filter(Boolean),
-        instanceName, // pass through so onSuccess can read it
+        ...vals,
+        instances: String(vals.instances ?? '').split(',').map((s: string) => s.trim()).filter(Boolean),
       };
       save.mutate(payload);
     });
   };
 
-  const handleProvision = () => {
-    provisionForm.validateFields().then(vals => {
-      if (!provisionTarget) return;
-      provision.mutate({ id: provisionTarget._id, instanceName: vals.instanceName });
+  const handleAddInstance = () => {
+    addInstForm.validateFields().then(vals => {
+      if (!addInstTarget) return;
+      addInstance.mutate({ id: addInstTarget._id, instanceName: vals.instanceName });
     });
   };
 
   const cols = [
     { title: 'Nome', dataIndex: 'name', key: 'name' },
-    { title: 'Instâncias', dataIndex: 'instances', key: 'instances',
-      render: (insts: string[]) => insts?.map(i => <Tag key={i}>{i}</Tag>) },
+    { title: 'WhatsApp', dataIndex: 'instances', key: 'instances',
+      render: (insts: string[]) => insts?.length
+        ? insts.map(i => <Tag key={i} color="green">{i}</Tag>)
+        : <span style={{ color: '#bbb', fontSize: 12 }}>nenhuma conta</span>
+    },
     { title: 'Assistente', dataIndex: 'assistantName', key: 'assistantName' },
     { title: 'Modelo', key: 'model', render: (_: unknown, b: Business) => <code style={{ fontSize: 11 }}>{b.settings?.model ?? '-'}</code> },
     { title: 'Chatwoot', key: 'chatwoot',
       render: (_: unknown, b: Business) => b.chatwootInboxId
-        ? <Tooltip title={`Inbox ID: ${b.chatwootInboxId}`}><Badge status="success" text="Provisionado" /></Tooltip>
-        : <Badge status="default" text="Não provisionado" />,
+        ? <Tooltip title={`Inbox ID: ${b.chatwootInboxId}`}><Badge status="success" text="Configurado" /></Tooltip>
+        : <Badge status="warning" text="Pendente" />,
     },
     {
       title: 'Ações', key: 'actions',
       render: (_: unknown, b: Business) => (
-        <Space>
+        <Space wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(b)}>Editar</Button>
-          {b.chatwootInboxId
-            ? <>
-                <Button size="small" icon={<QrcodeOutlined />} onClick={() => openQrModal(b)}>Conectar</Button>
-                <Button size="small" icon={<MailOutlined />} onClick={() => openLinkModal(b)}>Enviar link</Button>
-                <Tooltip title={`Inbox ${b.chatwootInboxId}`}>
-                  <Button size="small" icon={<LinkOutlined />}
-                    href="https://chatwoot.vendly.chat" target="_blank">Chatwoot</Button>
-                </Tooltip>
-              </>
-            : <Button size="small" icon={<ToolOutlined />} onClick={() => openProvision(b)}>Provisionar</Button>
-          }
+
+          {!b.chatwootInboxId && (
+            <Tooltip title="Chatwoot não configurado — clique para tentar novamente">
+              <Button size="small" icon={<WarningOutlined />} danger
+                loading={retryChatwoot.isPending}
+                onClick={() => retryChatwoot.mutate(b._id)}>
+                Reconectar Chatwoot
+              </Button>
+            </Tooltip>
+          )}
+
+          {b.chatwootInboxId && (
+            <Button size="small" icon={<MobileOutlined />} type="primary" ghost
+              onClick={() => openAddInstance(b)}>
+              + WhatsApp
+            </Button>
+          )}
+
+          {b.instances?.length > 0 && (
+            <>
+              <Button size="small" icon={<QrcodeOutlined />} onClick={() => openQrModal(b)}>Conectar</Button>
+              <Button size="small" icon={<MailOutlined />} onClick={() => openLinkModal(b)}>Enviar link</Button>
+            </>
+          )}
+
+          {b.chatwootInboxId && (
+            <Tooltip title={`Inbox ${b.chatwootInboxId}`}>
+              <Button size="small" icon={<LinkOutlined />}
+                href="https://chatwoot.vendly.chat" target="_blank">Chatwoot</Button>
+            </Tooltip>
+          )}
+
           <Popconfirm title="Remover negócio?" onConfirm={() => remove.mutate(b._id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>Remover</Button>
           </Popconfirm>
@@ -220,37 +243,25 @@ export default function Businesses() {
 
       <Table rowKey="_id" dataSource={data} columns={cols} loading={isLoading} pagination={{ pageSize: 20 }} />
 
+      {/* ── Criar / Editar negócio */}
       <Modal
         title={editing ? 'Editar negócio' : 'Novo negócio'}
         open={open}
         onOk={handleSubmit}
         onCancel={() => setOpen(false)}
         confirmLoading={save.isPending}
-        okText={creating ? 'Criar e Provisionar' : 'Salvar'}
+        okText={editing ? 'Salvar' : 'Criar'}
         width={600}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        {!editing && (
+          <p style={{ color: '#52c41a', marginBottom: 12, fontSize: 13 }}>
+            ℹ️ O Chatwoot será configurado automaticamente. Depois use "+ WhatsApp" para adicionar uma conta.
+          </p>
+        )}
+        <Form form={form} layout="vertical">
           <Form.Item name="name" label="Nome" rules={[{ required: true }]}>
             <Input placeholder="Ex: Loja da Maria" />
           </Form.Item>
-          {creating && (
-            <Form.Item
-              name="instanceName"
-              label="Nome da instância WhatsApp"
-              rules={[
-                { required: true, message: 'Informe o nome da instância' },
-                { pattern: /^[a-z0-9-]+$/, message: 'Use apenas letras minúsculas, números e hífen' },
-              ]}
-              extra="Identificador único da instância Evolution. Ex: loja-maria"
-            >
-              <Input placeholder="loja-maria" />
-            </Form.Item>
-          )}
-          {!creating && (
-            <Form.Item name="instances" label="Instâncias Evolution (separadas por vírgula)">
-              <Input placeholder="Ex: loja-maria, loja-maria-vendas" />
-            </Form.Item>
-          )}
           <Form.Item name="assistantName" label="Nome do assistente">
             <Input placeholder="Assistente" />
           </Form.Item>
@@ -267,28 +278,30 @@ export default function Businesses() {
         </Form>
       </Modal>
 
+      {/* ── Adicionar conta WhatsApp */}
       <Modal
-        title={`Provisionar: ${provisionTarget?.name ?? ''}`}
-        open={provisionOpen}
-        onOk={handleProvision}
-        onCancel={() => setProvisionOpen(false)}
-        confirmLoading={provision.isPending}
-        okText="Provisionar"
-        width={480}
+        title={`+ WhatsApp — ${addInstTarget?.name ?? ''}`}
+        open={addInstOpen}
+        onOk={handleAddInstance}
+        onCancel={() => setAddInstOpen(false)}
+        confirmLoading={addInstance.isPending}
+        okText="Criar e abrir QR"
+        width={440}
       >
-        <p style={{ marginBottom: 16, color: '#666' }}>
-          Cria a instância Evolution e o inbox Chatwoot automaticamente, já integrados.
+        <p style={{ color: '#666', marginBottom: 16 }}>
+          Cria uma instância WhatsApp integrada ao Chatwoot. O QR code será exibido em seguida.
         </p>
-        <Form form={provisionForm} layout="vertical">
+        <Form form={addInstForm} layout="vertical">
           <Form.Item
             name="instanceName"
-            label="Nome da instância Evolution"
+            label="Nome da instância"
             rules={[
-              { required: true, message: 'Informe o nome da instância' },
+              { required: true, message: 'Informe o nome' },
               { pattern: /^[a-z0-9-]+$/, message: 'Use apenas letras minúsculas, números e hífen' },
             ]}
+            extra="Identificador único e imutável. Ex: loja-maria"
           >
-            <Input placeholder="Ex: loja-maria" />
+            <Input placeholder="loja-maria" />
           </Form.Item>
         </Form>
       </Modal>

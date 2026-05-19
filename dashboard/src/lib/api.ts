@@ -36,6 +36,10 @@ export const api = {
   deleteBusiness: (id: string) => req<{ ok: boolean }>(`/businesses/${id}`, { method: 'DELETE' }),
   provisionBusiness: (id: string, data: { instanceName: string }) =>
     req<import('./types').Business>(`/businesses/${id}/provision`, { method: 'POST', body: JSON.stringify(data) }),
+  addInstance: (id: string, data: { instanceName: string }) =>
+    req<import('./types').Business>(`/businesses/${id}/add-instance`, { method: 'POST', body: JSON.stringify(data) }),
+  retryChatwoot: (id: string) =>
+    req<{ ok: boolean; chatwootInboxId: number }>(`/businesses/${id}/retry-chatwoot`, { method: 'POST' }),
   getBusinessQr: (id: string) =>
     req<{ base64: string | null; code: string | null; instanceName: string }>(`/businesses/${id}/qr`),
   getBusinessQrStatus: (id: string) =>
