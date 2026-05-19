@@ -63,12 +63,11 @@ export default function Businesses() {
   const addInstance = useMutation({
     mutationFn: ({ id, instanceName }: { id: string; instanceName: string }) =>
       api.addInstance(id, { instanceName }),
-    onSuccess: (updated, vars) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['businesses'] });
       setAddInstOpen(false);
       addInstForm.resetFields();
-      message.success('Instância criada! Escaneie o QR code para conectar o WhatsApp.');
-      openQrModal({ ...(updated as Business), instances: [...((updated as Business).instances ?? []), vars.instanceName] });
+      message.success('Instância adicionada! Clique em "Conectar" para escanear o QR.');
     },
     onError: (e: Error) => message.error(e.message),
   });

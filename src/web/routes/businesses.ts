@@ -132,23 +132,28 @@ businessesRouter.post('/:id/add-instance', async (req, res) => {
 
     const iName = instanceName.trim();
 
-    // Criar instância Evolution integrada ao inbox Chatwoot do negócio
-    await axios.post(
-      `${config.evolution.url}/instance/create`,
-      {
-        instanceName: iName,
-        qrcode: true,
-        integration: 'WHATSAPP-BAILEYS',
-        chatwootAccountId: config.chatwoot.accountId,
-        chatwootToken: config.chatwoot.apiKey,
-        chatwootUrl: config.chatwoot.url,
-        chatwootInboxId: String(business.chatwootInboxId ?? ''),
-        chatwootSignMsg: false,
-        chatwootReopenConversation: true,
-        chatwootConversationPending: false,
-      },
-      { headers: { apikey: config.evolution.apiKey }, timeout: 15_000 },
-    );
+    // Criar instância Evolution — ignora se já existir (403 = already in use)
+    try {
+      await axios.post(
+        `${config.evolution.url}/instance/create`,
+        {
+          instanceName: iName,
+          qrcode: true,
+          integration: 'WHATSAPP-BAILEYS',
+          chatwootAccountId: config.chatwoot.accountId,
+          chatwootToken: config.chatwoot.apiKey,
+          chatwootUrl: config.chatwoot.url,
+          chatwootInboxId: String(business.chatwootInboxId ?? ''),
+          chatwootSignMsg: false,
+          chatwootReopenConversation: true,
+          chatwootConversationPending: false,
+        },
+        { headers: { apikey: config.evolution.apiKey }, timeout: 15_000 },
+      );
+    } catch (createErr) {
+      const status = (createErr as { response?: { status?: number } }).response?.status;
+      if (status !== 403) throw createErr; // 403 = já existe, continua; outros erros propagam
+    }
 
     // Webhook Evolution → N8N
     await axios.post(
