@@ -12,6 +12,7 @@ RUN npm ci
 # Copia fonte e compila
 COPY tsconfig.json ./
 COPY src/ ./src/
+COPY dashboard/ ./dashboard/
 RUN npm run build
 
 # ─────────────────────────────────────────────
@@ -30,6 +31,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Copia apenas o build compilado
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/public ./public
 
 # Transfere ownership para usuário não-root
 RUN chown -R mcp:mcp /app
