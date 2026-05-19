@@ -36,6 +36,12 @@ export const api = {
   deleteBusiness: (id: string) => req<{ ok: boolean }>(`/businesses/${id}`, { method: 'DELETE' }),
   provisionBusiness: (id: string, data: { instanceName: string }) =>
     req<import('./types').Business>(`/businesses/${id}/provision`, { method: 'POST', body: JSON.stringify(data) }),
+  getBusinessQr: (id: string) =>
+    req<{ base64: string | null; code: string | null; instanceName: string }>(`/businesses/${id}/qr`),
+  getBusinessQrStatus: (id: string) =>
+    req<{ status: string; instanceName?: string }>(`/businesses/${id}/qr-status`),
+  sendQrLink: (id: string, email: string) =>
+    req<{ ok: boolean; connectUrl: string }>(`/businesses/${id}/qr-link`, { method: 'POST', body: JSON.stringify({ email }) }),
 
   // Customers
   getCustomers: (params?: Record<string, string>) => {

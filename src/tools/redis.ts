@@ -4,7 +4,7 @@ import { config } from '../config.js';
 
 let _redis: InstanceType<typeof Redis> | null = null;
 
-function getRedis(): InstanceType<typeof Redis> {
+export function getRedis(): InstanceType<typeof Redis> {
   if (_redis) return _redis;
   _redis = new Redis(config.redis.url, {
     lazyConnect: true,

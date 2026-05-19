@@ -16,6 +16,7 @@ import { qdrantTools, handleQdrantTool } from './tools/qdrant.js';
 import { coolifyTools, handleCoolifyTool } from './tools/coolify.js';
 import { intelligenceTools, handleIntelligenceTool } from './tools/intelligence.js';
 import { apiRouter } from './web/router.js';
+import { connectRouter } from './web/routes/connect.js';
 // ── Registro global de ferramentas ─────────────────────────────────────────
 const ALL_TOOLS = [
     ...n8nTools,
@@ -87,6 +88,7 @@ async function main() {
         const webApp = express();
         webApp.use(express.json({ limit: '2mb' }));
         webApp.use('/api', apiRouter);
+        webApp.use('/connect', connectRouter); // public QR connect page (no auth)
         webApp.use(express.static(publicDir));
         // SPA fallback — serve index.html for all non-API routes
         webApp.get(/^\/(?!api|mcp|health).*/, (_req, webRes) => {

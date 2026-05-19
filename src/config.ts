@@ -1,5 +1,12 @@
 import 'dotenv/config';
 
+// Build Redis URL from REDIS_URL or individual vars
+const redisUrl =
+  process.env.REDIS_URL ??
+  (process.env.REDIS_HOST
+    ? `redis://:${process.env.REDIS_PASSWORD ?? ''}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT ?? '6379'}`
+    : 'redis://localhost:6379');
+
 export const config = {
   n8n: {
     url: process.env.N8N_URL ?? 'http://localhost:5678',
@@ -18,7 +25,7 @@ export const config = {
     uri: process.env.MONGODB_URI ?? 'mongodb://localhost:27017',
   },
   redis: {
-    url: process.env.REDIS_URL ?? 'redis://localhost:6379',
+    url: redisUrl,
   },
   qdrant: {
     url: process.env.QDRANT_URL ?? 'http://localhost:6333',
@@ -34,5 +41,12 @@ export const config = {
   },
   admin: {
     apiKey: process.env.ADMIN_API_KEY ?? 'vendly-admin-dev',
+  },
+  smtp: {
+    host: process.env.SMTP_HOST ?? '',
+    port: parseInt(process.env.SMTP_PORT ?? '587', 10),
+    user: process.env.SMTP_USER ?? '',
+    password: process.env.SMTP_PASSWORD ?? '',
+    from: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? 'noreply@vendly.chat',
   },
 };

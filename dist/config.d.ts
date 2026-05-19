@@ -34,4 +34,11 @@ export declare const config: {
     admin: {
         apiKey: string;
     };
+    smtp: {
+        host: string;
+        port: number;
+        user: string;
+        password: string;
+        from: string;
+    };
 };

@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Button, Table, Modal, Form, Input, Select, Space,
-  Popconfirm, Tag, Typography, message, Tooltip, Badge,
+  Popconfirm, Tag, Typography, message, Tooltip, Badge, Spin, Result,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, LinkOutlined, ToolOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, LinkOutlined, ToolOutlined, QrcodeOutlined, MailOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { Business } from '../lib/types';
@@ -20,6 +20,21 @@ export default function Businesses() {
   const [editing, setEditing] = useState<Business | null>(null);
   const [provisionOpen, setProvisionOpen] = useState(false);
   const [provisionTarget, setProvisionTarget] = useState<Business | null>(null);
+
+  // QR modal state
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrBusiness, setQrBusiness] = useState<Business | null>(null);
+  const [qrBase64, setQrBase64] = useState<string | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrConnected, setQrConnected] = useState(false);
+  const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const qrStatusRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Send link modal state
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkBusiness, setLinkBusiness] = useState<Business | null>(null);
+  const [linkForm] = Form.useForm();
+  const [linkResult, setLinkResult] = useState<string | null>(null);
 
   const save = useMutation({
     mutationFn: (values: Partial<Business>) =>
@@ -44,6 +59,66 @@ export default function Businesses() {
     },
     onError: (e: Error) => message.error(e.message),
   });
+
+  const sendLink = useMutation({
+    mutationFn: ({ id, email }: { id: string; email: string }) => api.sendQrLink(id, email),
+    onSuccess: (data) => { setLinkResult(data.connectUrl); message.success('E-mail enviado!'); },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  // QR helpers
+  const fetchQr = async (id: string) => {
+    setQrLoading(true);
+    setQrBase64(null);
+    try {
+      const d = await api.getBusinessQr(id);
+      setQrBase64(d.base64);
+    } catch { message.error('Não foi possível obter o QR code'); }
+    setQrLoading(false);
+  };
+
+  const startQrPolling = (id: string) => {
+    if (qrStatusRef.current) clearInterval(qrStatusRef.current);
+    qrStatusRef.current = setInterval(async () => {
+      try {
+        const d = await api.getBusinessQrStatus(id);
+        if (d.status === 'open') {
+          setQrConnected(true);
+          clearInterval(qrStatusRef.current!);
+          clearInterval(qrRefreshRef.current!);
+        }
+      } catch { /* ignore */ }
+    }, 5000);
+    if (qrRefreshRef.current) clearInterval(qrRefreshRef.current);
+    qrRefreshRef.current = setInterval(() => fetchQr(id), 30_000);
+  };
+
+  const openQrModal = (b: Business) => {
+    setQrBusiness(b);
+    setQrConnected(false);
+    setQrBase64(null);
+    setQrOpen(true);
+    fetchQr(b._id);
+    startQrPolling(b._id);
+  };
+
+  const closeQrModal = () => {
+    setQrOpen(false);
+    if (qrRefreshRef.current) clearInterval(qrRefreshRef.current);
+    if (qrStatusRef.current) clearInterval(qrStatusRef.current);
+  };
+
+  useEffect(() => () => {
+    if (qrRefreshRef.current) clearInterval(qrRefreshRef.current);
+    if (qrStatusRef.current) clearInterval(qrStatusRef.current);
+  }, []);
+
+  const openLinkModal = (b: Business) => {
+    setLinkBusiness(b);
+    setLinkResult(null);
+    linkForm.resetFields();
+    setLinkOpen(true);
+  };
 
   const openCreate = () => { form.resetFields(); setEditing(null); setOpen(true); };
   const openEdit = (b: Business) => {
@@ -91,10 +166,14 @@ export default function Businesses() {
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(b)}>Editar</Button>
           {b.chatwootInboxId
-            ? <Tooltip title={`Inbox ${b.chatwootInboxId}`}>
-                <Button size="small" icon={<LinkOutlined />}
-                  href="https://chatwoot.vendly.chat" target="_blank">Chatwoot</Button>
-              </Tooltip>
+            ? <>
+                <Button size="small" icon={<QrcodeOutlined />} onClick={() => openQrModal(b)}>Conectar</Button>
+                <Button size="small" icon={<MailOutlined />} onClick={() => openLinkModal(b)}>Enviar link</Button>
+                <Tooltip title={`Inbox ${b.chatwootInboxId}`}>
+                  <Button size="small" icon={<LinkOutlined />}
+                    href="https://chatwoot.vendly.chat" target="_blank">Chatwoot</Button>
+                </Tooltip>
+              </>
             : <Button size="small" icon={<ToolOutlined />} onClick={() => openProvision(b)}>Provisionar</Button>
           }
           <Popconfirm title="Remover negócio?" onConfirm={() => remove.mutate(b._id)}>
@@ -169,6 +248,71 @@ export default function Businesses() {
             <Input placeholder="Ex: loja-maria" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* QR Code modal — admin escaneia diretamente */}
+      <Modal
+        title={`Conectar WhatsApp — ${qrBusiness?.name ?? ''}`}
+        open={qrOpen}
+        onCancel={closeQrModal}
+        footer={qrConnected ? null : [
+          <Button key="refresh" onClick={() => qrBusiness && fetchQr(qrBusiness._id)} loading={qrLoading}>
+            ↻ Atualizar QR
+          </Button>,
+          <Button key="close" onClick={closeQrModal}>Fechar</Button>,
+        ]}
+        width={400}
+      >
+        {qrConnected ? (
+          <Result status="success" title="WhatsApp conectado!" subTitle="A instância está ativa e pronta para receber mensagens." />
+        ) : (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ width: 280, height: 280, margin: '0 auto 16px', background: '#f9f9f9', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #f0f0f0' }}>
+              {qrLoading ? <Spin size="large" /> : qrBase64
+                ? <img src={qrBase64} alt="QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 10 }} />
+                : <span style={{ color: '#bbb', fontSize: 13 }}>QR indisponível</span>
+              }
+            </div>
+            <p style={{ color: '#666', fontSize: 13, marginBottom: 8 }}>
+              Abra o WhatsApp → <strong>Configurações → Dispositivos conectados → Conectar dispositivo</strong>
+            </p>
+            <p style={{ color: '#999', fontSize: 12 }}>QR atualiza automaticamente a cada 30s</p>
+          </div>
+        )}
+      </Modal>
+
+      {/* Enviar link modal — gera link seguro e envia por e-mail */}
+      <Modal
+        title={`Enviar link de conexão — ${linkBusiness?.name ?? ''}`}
+        open={linkOpen}
+        onCancel={() => { setLinkOpen(false); setLinkResult(null); }}
+        footer={linkResult ? [<Button key="close" type="primary" onClick={() => { setLinkOpen(false); setLinkResult(null); }}>Fechar</Button>] : null}
+        width={480}
+      >
+        {linkResult ? (
+          <div>
+            <Result status="success" title="E-mail enviado!" subTitle="O link de conexão foi enviado para o destinatário." />
+            <p style={{ fontSize: 12, color: '#999', wordBreak: 'break-all', textAlign: 'center' }}>
+              Link (válido 24h): <a href={linkResult} target="_blank" rel="noreferrer">{linkResult}</a>
+            </p>
+          </div>
+        ) : (
+          <>
+            <p style={{ marginBottom: 16, color: '#666' }}>
+              Gera um link seguro com QR code e envia por e-mail. O link expira em <strong>24 horas</strong>.
+            </p>
+            <Form form={linkForm} layout="vertical" onFinish={vals => linkBusiness && sendLink.mutate({ id: linkBusiness._id, email: vals.email })}>
+              <Form.Item name="email" label="E-mail do destinatário" rules={[{ required: true, type: 'email', message: 'E-mail inválido' }]}>
+                <Input placeholder="cliente@exemplo.com" />
+              </Form.Item>
+              <Form.Item style={{ marginBottom: 0 }}>
+                <Button type="primary" htmlType="submit" loading={sendLink.isPending} block>
+                  Enviar link por e-mail
+                </Button>
+              </Form.Item>
+            </Form>
+          </>
+        )}
       </Modal>
     </>
   );

@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
 import { config } from '../config.js';
 let _redis = null;
-function getRedis() {
+export function getRedis() {
     if (_redis)
         return _redis;
     _redis = new Redis(config.redis.url, {
