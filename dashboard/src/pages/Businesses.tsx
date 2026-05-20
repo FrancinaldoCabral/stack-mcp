@@ -98,6 +98,8 @@ function InstancesPanel({
   const [statuses, setStatuses] = useState<InstanceStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [botLoading, setBotLoading] = useState<string | null>(null);
+  const [botEnabled, setBotEnabled] = useState<Record<string, boolean>>({});
 
   const fetchStatuses = useCallback(async () => {
     try {
@@ -106,12 +108,25 @@ function InstancesPanel({
     } catch { /* ignore */ } finally { setLoading(false); }
   }, [business._id]);
 
+  // Fetch Chatwoot bot status for all instances
+  const fetchBotStatuses = useCallback(async () => {
+    const instances = business.instances ?? [];
+    const results = await Promise.allSettled(instances.map(name => api.getChatwootStatus(business._id, name)));
+    const map: Record<string, boolean> = {};
+    instances.forEach((name, i) => {
+      const r = results[i];
+      if (r.status === 'fulfilled') map[name] = r.value.botEnabled;
+    });
+    setBotEnabled(map);
+  }, [business._id, business.instances]);
+
   useEffect(() => {
     setLoading(true);
     fetchStatuses();
+    fetchBotStatuses();
     const id = setInterval(fetchStatuses, 10_000);
     return () => clearInterval(id);
-  }, [fetchStatuses, refreshKey]);
+  }, [fetchStatuses, fetchBotStatuses, refreshKey]);
 
   const disconnect = async (instanceName: string) => {
     setDisconnecting(instanceName);
@@ -121,6 +136,17 @@ function InstancesPanel({
       fetchStatuses();
     } catch (e) { message.error((e as Error).message); }
     finally { setDisconnecting(null); }
+  };
+
+  const toggleBot = async (instanceName: string) => {
+    setBotLoading(instanceName);
+    const currentlyEnabled = botEnabled[instanceName] ?? false;
+    try {
+      await api.setAgentBot(business._id, instanceName, !currentlyEnabled);
+      setBotEnabled(prev => ({ ...prev, [instanceName]: !currentlyEnabled }));
+      message.success(!currentlyEnabled ? `Bot IA ativado para ${instanceName}` : `Bot IA desativado para ${instanceName}`);
+    } catch (e) { message.error((e as Error).message); }
+    finally { setBotLoading(null); }
   };
 
   const sc = (s: string): 'success' | 'warning' | 'default' =>
@@ -184,6 +210,19 @@ function InstancesPanel({
                     <Button size="small" icon={<MessageOutlined />} href={`https://chatwoot.vendly.chat/app/accounts/1/inbox/${inst.inboxId}`} target="_blank">
                       Inbox
                     </Button>
+                  )}
+                  {inst.inboxId && (
+                    <Tooltip title={botEnabled[inst.instanceName] ? 'Bot IA ativo — clique para desativar' : 'Ativar Bot IA nesta inbox'}>
+                      <Button
+                        size="small"
+                        icon={<RobotOutlined />}
+                        loading={botLoading === inst.instanceName}
+                        type={botEnabled[inst.instanceName] ? 'primary' : 'default'}
+                        onClick={() => toggleBot(inst.instanceName)}
+                      >
+                        Bot IA
+                      </Button>
+                    </Tooltip>
                   )}
                 </Space>
               </div>

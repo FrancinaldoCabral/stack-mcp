@@ -60,6 +60,10 @@ export const api = {
     req<import('./types').Business>(`/businesses/${bizId}/agents/${agentId}`, { method: 'DELETE' }),
   assignAgent: (bizId: string, instanceName: string, agentId: string | null) =>
     req<import('./types').Business>(`/businesses/${bizId}/instances/${encodeURIComponent(instanceName)}/assign-agent`, { method: 'PUT', body: JSON.stringify({ agentId }) }),
+  setAgentBot: (bizId: string, instanceName: string, enable: boolean) =>
+    req<{ ok: boolean; botEnabled: boolean; inboxId: number; botId?: number }>(`/businesses/${bizId}/instances/${encodeURIComponent(instanceName)}/set-agent-bot`, { method: 'POST', body: JSON.stringify({ enable }) }),
+  getChatwootStatus: (bizId: string, instanceName: string) =>
+    req<{ configured: boolean; inboxId: number | null; botEnabled: boolean; agentBot?: { id: number; name: string } | null }>(`/businesses/${bizId}/instances/${encodeURIComponent(instanceName)}/chatwoot-status`),
 
   // Customers
   getCustomers: (params?: Record<string, string>) => {

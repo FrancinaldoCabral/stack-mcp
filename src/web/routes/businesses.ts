@@ -251,7 +251,11 @@ businessesRouter.post('/:id/add-instance', async (req, res) => {
       );
       const inboxes = (inboxesRes.data?.payload ?? []) as { id: number; name: string }[];
       const inbox = inboxes.find(i => i.name === iName);
-      if (inbox) instanceChatwootInboxId = inbox.id;
+      if (inbox) {
+        instanceChatwootInboxId = inbox.id;
+        // Atribuir Agent Bot Vendly AI à inbox (silencioso se bot não existir)
+        try { await assignVendlyBotToInbox(inbox.id); } catch (_) { /* opcional */ }
+      }
 
       // Garantir webhook de conta Chatwoot → N8N (idempotente)
       const handoffUrl = `${config.n8n.url}/webhook/chatwoot-events`;
@@ -623,6 +627,103 @@ businessesRouter.delete('/:id/agents/:agentId', async (req, res) => {
     res.json(updated);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
+
+// ── Chatwoot Agent Bot helpers ────────────────────────────────────────────────
+
+/** Busca o ID do Agent Bot 'Vendly AI' no Chatwoot. Retorna null se não encontrado. */
+async function findVendlyAgentBotId(): Promise<number | null> {
+  try {
+    const res = await axios.get(
+      `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/agent_bots`,
+      { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 8_000 },
+    );
+    const bots = (res.data ?? []) as { id: number; name: string; outgoing_url?: string }[];
+    const bot = bots.find(b => b.name === 'Vendly AI');
+    return bot?.id ?? null;
+  } catch { return null; }
+}
+
+/** Atribui o Agent Bot Vendly AI à inbox. Retorna o ID do bot ou null se não encontrado. */
+async function assignVendlyBotToInbox(inboxId: number): Promise<number | null> {
+  const botId = await findVendlyAgentBotId();
+  if (!botId) return null;
+  await axios.post(
+    `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes/${inboxId}/set_agent_bot`,
+    { agent_bot: botId },
+    { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 8_000 },
+  );
+  return botId;
+}
+
+// POST /api/businesses/:id/instances/:name/set-agent-bot — ativar/desativar Agent Bot Chatwoot
+businessesRouter.post('/:id/instances/:name/set-agent-bot', async (req, res) => {
+  try {
+    const { name: instanceName } = req.params;
+    const { enable = true } = req.body as { enable?: boolean };
+
+    const db = await getDb();
+    const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
+    if (!business) return res.status(404).json({ error: 'Negócio não encontrado' });
+
+    const instanceInboxes = (business.instanceInboxes as Record<string, number>) ?? {};
+    const inboxId = instanceInboxes[instanceName];
+    if (!inboxId) return res.status(400).json({ error: `Inbox não encontrada para instância "${instanceName}". Configure o Chatwoot primeiro.` });
+
+    if (enable) {
+      const botId = await assignVendlyBotToInbox(inboxId);
+      if (!botId) return res.status(404).json({ error: 'Agent Bot "Vendly AI" não encontrado no Chatwoot. Execute setup-chatwoot-first.mjs primeiro.' });
+      ok(`Agent Bot (ID=${botId}) atribuído à inbox ${inboxId} (${instanceName})`);
+      res.json({ ok: true, botEnabled: true, inboxId, botId });
+    } else {
+      // Remove Agent Bot da inbox
+      await axios.post(
+        `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes/${inboxId}/set_agent_bot`,
+        { agent_bot: null },
+        { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 8_000 },
+      );
+      res.json({ ok: true, botEnabled: false, inboxId });
+    }
+  } catch (e) {
+    const err = e as { response?: { data?: unknown }; message?: string };
+    const detail = err.response?.data ?? err.message ?? String(e);
+    res.status(500).json({ error: typeof detail === 'string' ? detail : JSON.stringify(detail) });
+  }
+});
+
+// GET /api/businesses/:id/instances/:name/chatwoot-status — status Chatwoot da instância
+businessesRouter.get('/:id/instances/:name/chatwoot-status', async (req, res) => {
+  try {
+    const { name: instanceName } = req.params;
+    const db = await getDb();
+    const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
+    if (!business) return res.status(404).json({ error: 'Not found' });
+
+    const instanceInboxes = (business.instanceInboxes as Record<string, number>) ?? {};
+    const inboxId = instanceInboxes[instanceName];
+    if (!inboxId) return res.json({ configured: false, inboxId: null, botEnabled: false });
+
+    // Check if Agent Bot is assigned
+    try {
+      const inboxRes = await axios.get(
+        `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes/${inboxId}`,
+        { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 8_000 },
+      );
+      const inbox = inboxRes.data as { id: number; name: string; agent_bot?: { id: number; name: string } };
+      res.json({
+        configured: true,
+        inboxId,
+        inboxName: inbox.name,
+        botEnabled: !!(inbox.agent_bot?.id),
+        agentBot: inbox.agent_bot ?? null,
+      });
+    } catch {
+      res.json({ configured: true, inboxId, botEnabled: false });
+    }
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Helper log for agent bot operations
+function ok(msg: string) { console.log('✅', msg); }
 
 // PUT /api/businesses/:id/instances/:name/assign-agent — vincular/desvincular agente
 businessesRouter.put('/:id/instances/:name/assign-agent', async (req, res) => {
