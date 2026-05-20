@@ -118,6 +118,13 @@ function InstancesPanel({
 export default function Businesses() {
   const qc = useQueryClient();
   const { data = [], isLoading } = useQuery({ queryKey: ['businesses'], queryFn: api.getBusinesses });
+  // Manter todas as linhas expandidas (inclusive novas) quando a lista atualiza
+  useEffect(() => {
+    setExpandedRowKeys(prev => {
+      const newIds = data.map(b => b._id).filter(id => !prev.includes(id));
+      return newIds.length ? [...prev, ...newIds] : prev;
+    });
+  }, [data]);
   const [form] = Form.useForm();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Business | null>(null);
@@ -140,6 +147,7 @@ export default function Businesses() {
   const [qrLoading, setQrLoading] = useState(false);
   const [qrConnected, setQrConnected] = useState(false);
   const [instanceRefreshKeys, setInstanceRefreshKeys] = useState<Record<string, number>>({});
+  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);
   const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrStatusRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -216,7 +224,8 @@ export default function Businesses() {
           setQrConnected(true);
           clearInterval(qrStatusRef.current!);
           clearInterval(qrRefreshRef.current!);
-          bumpRefreshKey(id);
+          // Pequeno delay para Evolution estabilizar antes do painel re-buscar
+          setTimeout(() => bumpRefreshKey(id), 1500);
         }
       } catch { /* ignore */ }
     }, 5000);
@@ -238,6 +247,7 @@ export default function Businesses() {
     setQrOpen(false);
     if (qrRefreshRef.current) clearInterval(qrRefreshRef.current);
     if (qrStatusRef.current) clearInterval(qrStatusRef.current);
+    if (qrBusiness) bumpRefreshKey(qrBusiness._id);
   };
 
   useEffect(() => () => {
@@ -314,7 +324,11 @@ export default function Businesses() {
         loading={isLoading}
         pagination={{ pageSize: 20 }}
         expandable={{
-          defaultExpandAllRows: true,
+          expandedRowKeys,
+          onExpand: (expanded, record) =>
+            setExpandedRowKeys(prev =>
+              expanded ? [...prev, record._id] : prev.filter(k => k !== record._id)
+            ),
           expandedRowRender: (b) => (
             <InstancesPanel
               business={b}
