@@ -506,3 +506,152 @@ businessesRouter.post('/:id/qr-link', async (req, res) => {
     res.status(500).json({ error: typeof detail === 'string' ? detail : JSON.stringify(detail) });
   }
 });
+
+// ── Agentes ───────────────────────────────────────────────────────────────────
+
+type AgentDoc = {
+  _id: string;
+  name: string;
+  assistantName: string;
+  systemPrompt: string;
+  model: string;
+  settings: { maxHistoryTokens: number; tools: { searchMemory: boolean } };
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+async function syncAgentToRedis(instanceName: string, agent: AgentDoc | null) {
+  try {
+    const redis = getRedis();
+    const key = `agente:${instanceName}`;
+    if (agent) {
+      await redis.set(key, JSON.stringify({
+        systemPrompt: agent.systemPrompt,
+        assistantName: agent.assistantName,
+        model: agent.model,
+        maxHistoryTokens: agent.settings.maxHistoryTokens,
+        tools: agent.settings.tools,
+      }));
+    } else {
+      await redis.del(key);
+    }
+  } catch (_) { /* Redis sync opcional */ }
+}
+
+// POST /api/businesses/:id/agents — criar agente
+businessesRouter.post('/:id/agents', async (req, res) => {
+  try {
+    const db = await getDb();
+    const agent: AgentDoc = {
+      _id: randomUUID(),
+      name: String(req.body.name ?? 'Agente'),
+      assistantName: String(req.body.assistantName ?? 'Assistente'),
+      systemPrompt: String(req.body.systemPrompt ?? ''),
+      model: String(req.body.model ?? 'google/gemini-2.5-flash-lite'),
+      settings: {
+        maxHistoryTokens: Number(req.body.settings?.maxHistoryTokens ?? 500_000),
+        tools: { searchMemory: req.body.settings?.tools?.searchMemory ?? true },
+      },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const updated = await db.collection('businesses').findOneAndUpdate(
+      { _id: new ObjectId(req.params.id) },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { $push: { agents: agent } as any, $set: { updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    res.status(201).json(updated);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// PUT /api/businesses/:id/agents/:agentId — atualizar agente
+businessesRouter.put('/:id/agents/:agentId', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { agentId } = req.params;
+    const fields: Record<string, unknown> = { 'agents.$.updatedAt': new Date(), updatedAt: new Date() };
+    if (req.body.name !== undefined) fields['agents.$.name'] = req.body.name;
+    if (req.body.assistantName !== undefined) fields['agents.$.assistantName'] = req.body.assistantName;
+    if (req.body.systemPrompt !== undefined) fields['agents.$.systemPrompt'] = req.body.systemPrompt;
+    if (req.body.model !== undefined) fields['agents.$.model'] = req.body.model;
+    if (req.body.settings !== undefined) fields['agents.$.settings'] = req.body.settings;
+
+    const updated = await db.collection('businesses').findOneAndUpdate(
+      { _id: new ObjectId(req.params.id), 'agents._id': agentId },
+      { $set: fields },
+      { returnDocument: 'after' },
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+
+    // Sincroniza Redis para todas as instâncias que usam este agente
+    const instanceAgents = (updated.instanceAgents as Record<string, string>) ?? {};
+    const agents = (updated.agents as AgentDoc[]) ?? [];
+    const agent = agents.find(a => a._id === agentId);
+    if (agent) {
+      const assigned = Object.entries(instanceAgents).filter(([, aid]) => aid === agentId).map(([inst]) => inst);
+      await Promise.all(assigned.map(inst => syncAgentToRedis(inst, agent)));
+    }
+    res.json(updated);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// DELETE /api/businesses/:id/agents/:agentId — remover agente
+businessesRouter.delete('/:id/agents/:agentId', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { agentId } = req.params;
+    const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
+    if (!business) return res.status(404).json({ error: 'Not found' });
+
+    const instanceAgents = (business.instanceAgents as Record<string, string>) ?? {};
+    const affected = Object.entries(instanceAgents).filter(([, aid]) => aid === agentId).map(([inst]) => inst);
+    const newInstanceAgents = Object.fromEntries(Object.entries(instanceAgents).filter(([, aid]) => aid !== agentId));
+
+    const updated = await db.collection('businesses').findOneAndUpdate(
+      { _id: new ObjectId(req.params.id) },
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        $pull: { agents: { _id: agentId } } as any,
+        $set: { instanceAgents: newInstanceAgents, updatedAt: new Date() },
+      },
+      { returnDocument: 'after' },
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    await Promise.all(affected.map(inst => syncAgentToRedis(inst, null)));
+    res.json(updated);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// PUT /api/businesses/:id/instances/:name/assign-agent — vincular/desvincular agente
+businessesRouter.put('/:id/instances/:name/assign-agent', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { id, name: instanceName } = req.params;
+    const { agentId } = req.body as { agentId: string | null };
+
+    const business = await db.collection('businesses').findOne({ _id: new ObjectId(id) });
+    if (!business) return res.status(404).json({ error: 'Not found' });
+
+    const instanceAgents = { ...((business.instanceAgents as Record<string, string>) ?? {}) };
+    if (agentId) {
+      instanceAgents[instanceName] = agentId;
+    } else {
+      delete instanceAgents[instanceName];
+    }
+
+    const updated = await db.collection('businesses').findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: { instanceAgents, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+
+    const agents = (business.agents as AgentDoc[]) ?? [];
+    const agent = agentId ? (agents.find(a => a._id === agentId) ?? null) : null;
+    await syncAgentToRedis(instanceName, agent);
+
+    res.json(updated);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});

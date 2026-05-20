@@ -5,7 +5,6 @@ import Businesses from './pages/Businesses';
 import Customers from './pages/Customers';
 import Conversations from './pages/Conversations';
 import Analytics from './pages/Analytics';
-import AgentConfig from './pages/AgentConfig';
 import KnowledgeBase from './pages/KnowledgeBase';
 
 export default function App() {
@@ -19,7 +18,6 @@ export default function App() {
           <Route path="/conversations" element={<Conversations />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/knowledge" element={<KnowledgeBase />} />
-          <Route path="/agents" element={<AgentConfig />} />
         </Routes>
       </Layout>
     </BrowserRouter>

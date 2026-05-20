@@ -1,17 +1,26 @@
 // Tipos compartilhados com o backend
 
+export interface Agent {
+  _id: string;
+  name: string;          // ex: "Suporte", "Vendas"
+  assistantName: string; // ex: "Ana", "Carlos"
+  systemPrompt: string;
+  model: string;         // OpenRouter model ID
+  settings: {
+    maxHistoryTokens: number;
+    tools: { searchMemory: boolean };
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Business {
   _id: string;
   name: string;
   instances: string[];
-  assistantName: string;
-  systemPrompt: string;
-  settings: {
-    model: string;
-    maxHistoryTokens: number;
-    tools: { searchMemory: boolean };
-  };
-  instanceInboxes?: Record<string, number>;
+  agents: Agent[];
+  instanceAgents: Record<string, string>;   // instanceName → agent._id
+  instanceInboxes?: Record<string, number>; // instanceName → chatwootInboxId
   createdAt: string;
   updatedAt: string;
 }

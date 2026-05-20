@@ -1,26 +1,99 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Button, Table, Modal, Form, Input, Space, Typography, message, Spin, Result, Badge, Tooltip } from 'antd';
-import { PlusOutlined, EditOutlined, MessageOutlined, DeleteOutlined, LinkOutlined, DisconnectOutlined, WifiOutlined, CopyOutlined } from '@ant-design/icons';
+﻿import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Button, Table, Modal, Form, Input, Space, Typography, message,
+  Spin, Result, Badge, Tooltip, AutoComplete, InputNumber, Switch,
+  Select, Popconfirm, Divider, Tag,
+} from 'antd';
+import {
+  PlusOutlined, EditOutlined, MessageOutlined, DeleteOutlined,
+  LinkOutlined, DisconnectOutlined, WifiOutlined, CopyOutlined, RobotOutlined,
+} from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { Business } from '../lib/types';
+import type { Business, Agent } from '../lib/types';
 
 const { Title, Text } = Typography;
 
-// ── Painel de instâncias (por negócio) ─────────────────────────────────────────
+const POPULAR_MODELS = [
+  'google/gemini-2.5-flash-lite',
+  'google/gemini-2.5-flash',
+  'google/gemini-2.0-flash-001',
+  'openai/gpt-4.1-mini',
+  'openai/gpt-4o-mini',
+  'openai/gpt-4o',
+  'anthropic/claude-3.5-haiku',
+  'anthropic/claude-sonnet-4-5',
+  'meta-llama/llama-3.3-70b-instruct',
+  'deepseek/deepseek-chat-v3-0324',
+].map(v => ({ value: v, label: v }));
+
+// Seção de agentes (dentro do expanded row)
+
+function AgentsSection({
+  business, onAdd, onEdit, onDelete,
+}: {
+  business: Business;
+  onAdd: () => void;
+  onEdit: (agent: Agent) => void;
+  onDelete: (agentId: string) => void;
+}) {
+  const agents = business.agents ?? [];
+  const assignedIds = new Set(Object.values(business.instanceAgents ?? {}));
+  return (
+    <div style={{ padding: '10px 48px 4px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <Text style={{ fontSize: 11, textTransform: 'uppercase', color: '#999', fontWeight: 600, letterSpacing: 0.5 }}>
+          <RobotOutlined style={{ marginRight: 4 }} />Agentes IA
+        </Text>
+        <Button type="link" size="small" icon={<PlusOutlined />} style={{ padding: 0, height: 'auto', fontSize: 12 }} onClick={onAdd}>
+          Novo agente
+        </Button>
+      </div>
+      {agents.length === 0 ? (
+        <div style={{ color: '#bbb', fontSize: 12, paddingBottom: 8, fontStyle: 'italic' }}>
+          Nenhum agente configurado. Crie um agente para responder mensagens automaticamente.
+        </div>
+      ) : (
+        agents.map(agent => (
+          <div key={agent._id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0', borderBottom: '1px solid #f9f9f9' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Text strong style={{ fontSize: 13 }}>{agent.name}</Text>
+              <Text style={{ fontSize: 12, color: '#666', marginLeft: 8 }}>({agent.assistantName})</Text>
+              <Text code style={{ fontSize: 10, marginLeft: 8, color: '#888' }}>{agent.model}</Text>
+              {assignedIds.has(agent._id) && (
+                <Tag color="green" style={{ fontSize: 10, marginLeft: 8, lineHeight: '16px', padding: '0 4px' }}>ativo</Tag>
+              )}
+            </div>
+            <Space size={4}>
+              <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(agent)}>Editar</Button>
+              <Popconfirm
+                title="Remover agente?"
+                description="Números vinculados ficarão sem atendimento automático."
+                onConfirm={() => onDelete(agent._id)}
+                okText="Remover" cancelText="Cancelar" okButtonProps={{ danger: true }}
+              >
+                <Button size="small" danger ghost icon={<DeleteOutlined />} />
+              </Popconfirm>
+            </Space>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// Painel de instâncias (números WhatsApp)
 
 interface InstanceStatus { instanceName: string; status: string; inboxId: number | null; }
 
 function InstancesPanel({
-  business,
-  refreshKey,
-  onConnect,
-  onSendLink,
+  business, refreshKey, onConnect, onSendLink, onAssignAgent,
 }: {
   business: Business;
   refreshKey: number;
   onConnect: (b: Business, instanceName: string) => void;
   onSendLink: (b: Business, instanceName: string) => void;
+  onAssignAgent: (instanceName: string, agentId: string | null) => void;
 }) {
   const [statuses, setStatuses] = useState<InstanceStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,96 +123,106 @@ function InstancesPanel({
     finally { setDisconnecting(null); }
   };
 
-  if (!business.instances?.length) {
-    return (
-      <div style={{ padding: '8px 48px 12px', color: '#aaa', fontSize: 12 }}>
-        Nenhuma instância WhatsApp. Use "+ WhatsApp" para adicionar.
-      </div>
-    );
-  }
+  const sc = (s: string): 'success' | 'warning' | 'default' =>
+    s === 'open' ? 'success' : s === 'connecting' ? 'warning' : 'default';
+  const sl = (s: string) =>
+    s === 'open' ? 'Conectado' : s === 'connecting' ? 'Conectando...' : 'Desconectado';
 
-  const statusColor = (s: string): 'success' | 'warning' | 'default' => s === 'open' ? 'success' : s === 'connecting' ? 'warning' : 'default';
-  const statusLabel = (s: string) => s === 'open' ? 'Conectado' : s === 'connecting' ? 'Conectando…' : 'Desconectado';
-
-  // Fallback: usar business.instances se status ainda não chegou
+  const agents = business.agents ?? [];
+  const instanceAgents = business.instanceAgents ?? {};
   const rows: InstanceStatus[] = statuses.length > 0
     ? statuses
-    : business.instances.map(name => ({ instanceName: name, status: 'unknown', inboxId: (business.instanceInboxes ?? {})[name] ?? null }));
+    : (business.instances ?? []).map(name => ({ instanceName: name, status: 'unknown', inboxId: (business.instanceInboxes ?? {})[name] ?? null }));
 
   return (
-    <div style={{ padding: '4px 48px 12px' }}>
-      {loading && statuses.length === 0 ? (
-        <Spin size="small" />
+    <div>
+      <div style={{ padding: '10px 48px 4px' }}>
+        <Text style={{ fontSize: 11, textTransform: 'uppercase', color: '#999', fontWeight: 600, letterSpacing: 0.5 }}>
+          Números WhatsApp
+        </Text>
+      </div>
+      {!business.instances?.length ? (
+        <div style={{ padding: '4px 48px 12px', color: '#bbb', fontSize: 12, fontStyle: 'italic' }}>
+          Nenhum número. Use "+ WhatsApp" para adicionar.
+        </div>
       ) : (
-        rows.map(inst => (
-          <div key={inst.instanceName} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0', borderBottom: '1px solid #f5f5f5' }}>
-            <Text code style={{ fontSize: 12, minWidth: 160 }}>{inst.instanceName}</Text>
-            <Badge status={statusColor(inst.status)} text={<span style={{ fontSize: 12 }}>{statusLabel(inst.status)}</span>} />
-            <Space size={4}>
-              {inst.status !== 'open' && (
-                <>
-                  <Button size="small" type="primary" ghost icon={<WifiOutlined />} onClick={() => onConnect(business, inst.instanceName)}>
-                    Conectar
-                  </Button>
-                  <Tooltip title="Gerar link seguro para alguém conectar o número remotamente">
-                    <Button size="small" icon={<LinkOutlined />} onClick={() => onSendLink(business, inst.instanceName)}>
-                      Enviar link
-                    </Button>
-                  </Tooltip>
-                </>
-              )}
-              {inst.status === 'open' && (
-                <Button
+        <div style={{ padding: '0 48px 12px' }}>
+          {loading && statuses.length === 0 ? (
+            <Spin size="small" style={{ marginTop: 8 }} />
+          ) : (
+            rows.map(inst => (
+              <div key={inst.instanceName} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: '1px solid #f5f5f5', flexWrap: 'wrap' }}>
+                <Text code style={{ fontSize: 12, minWidth: 140 }}>{inst.instanceName}</Text>
+                <Badge status={sc(inst.status)} text={<span style={{ fontSize: 12 }}>{sl(inst.status)}</span>} />
+                <Select
                   size="small"
-                  danger
-                  ghost
-                  icon={<DisconnectOutlined />}
-                  loading={disconnecting === inst.instanceName}
-                  onClick={() => disconnect(inst.instanceName)}
-                >
-                  Desconectar
-                </Button>
-              )}
-              {inst.inboxId && (
-                <Button size="small" icon={<MessageOutlined />} href={`https://chatwoot.vendly.chat/app/accounts/1/inbox/${inst.inboxId}`} target="_blank">
-                  Caixa de entrada
-                </Button>
-              )}
-            </Space>
-          </div>
-        ))
+                  style={{ minWidth: 160 }}
+                  value={instanceAgents[inst.instanceName] ?? null}
+                  onChange={(agentId) => onAssignAgent(inst.instanceName, agentId)}
+                  placeholder={agents.length ? 'Sem agente' : '— crie um agente —'}
+                  allowClear
+                  options={agents.map(a => ({ value: a._id, label: a.name }))}
+                  disabled={agents.length === 0}
+                />
+                <Space size={4}>
+                  {inst.status !== 'open' && (
+                    <>
+                      <Button size="small" type="primary" ghost icon={<WifiOutlined />} onClick={() => onConnect(business, inst.instanceName)}>Conectar</Button>
+                      <Tooltip title="Link seguro para conectar remotamente">
+                        <Button size="small" icon={<LinkOutlined />} onClick={() => onSendLink(business, inst.instanceName)}>Enviar link</Button>
+                      </Tooltip>
+                    </>
+                  )}
+                  {inst.status === 'open' && (
+                    <Button size="small" danger ghost icon={<DisconnectOutlined />}
+                      loading={disconnecting === inst.instanceName}
+                      onClick={() => disconnect(inst.instanceName)}>
+                      Desconectar
+                    </Button>
+                  )}
+                  {inst.inboxId && (
+                    <Button size="small" icon={<MessageOutlined />} href={`https://chatwoot.vendly.chat/app/accounts/1/inbox/${inst.inboxId}`} target="_blank">
+                      Inbox
+                    </Button>
+                  )}
+                </Space>
+              </div>
+            ))
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-// ── Página principal ────────────────────────────────────────────────────────────
+// Página principal
+
+const { Title: H3 } = Typography;
 
 export default function Businesses() {
   const qc = useQueryClient();
   const { data = [], isLoading } = useQuery({ queryKey: ['businesses'], queryFn: api.getBusinesses });
-  // Manter todas as linhas expandidas (inclusive novas) quando a lista atualiza
+
+  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);
   useEffect(() => {
     setExpandedRowKeys(prev => {
       const newIds = data.map(b => b._id).filter(id => !prev.includes(id));
       return newIds.length ? [...prev, ...newIds] : prev;
     });
   }, [data]);
-  const [form] = Form.useForm();
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<Business | null>(null);
 
-  // + WhatsApp modal
+  const [bizOpen, setBizOpen] = useState(false);
+  const [editingBiz, setEditingBiz] = useState<Business | null>(null);
+  const [bizForm] = Form.useForm();
+
   const [addInstOpen, setAddInstOpen] = useState(false);
   const [addInstTarget, setAddInstTarget] = useState<Business | null>(null);
   const [addInstForm] = Form.useForm();
   const connectAfterRef = useRef(false);
 
-  // Excluir
   const [deleteTarget, setDeleteTarget] = useState<Business | null>(null);
   const [deleteInput, setDeleteInput] = useState('');
 
-  // QR modal
   const [qrOpen, setQrOpen] = useState(false);
   const [qrBusiness, setQrBusiness] = useState<Business | null>(null);
   const [qrInstanceName, setQrInstanceName] = useState<string | null>(null);
@@ -147,51 +230,44 @@ export default function Businesses() {
   const [qrLoading, setQrLoading] = useState(false);
   const [qrConnected, setQrConnected] = useState(false);
   const [instanceRefreshKeys, setInstanceRefreshKeys] = useState<Record<string, number>>({});
-  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);
   const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrStatusRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Enviar link modal
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkTarget, setLinkTarget] = useState<{ business: Business; instanceName: string } | null>(null);
   const [linkEmail, setLinkEmail] = useState('');
   const [linkUrl, setLinkUrl] = useState<string | null>(null);
   const [linkLoading, setLinkLoading] = useState(false);
 
-  // ── Mutations ────────────────────────────────────────────────────────────────
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentBiz, setAgentBiz] = useState<Business | null>(null);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [agentForm] = Form.useForm();
 
-  const save = useMutation({
+  // Mutations
+
+  const saveBiz = useMutation({
     mutationFn: (values: Partial<Business>) =>
-      editing ? api.updateBusiness(editing._id, values) : api.createBusiness(values),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['businesses'] });
-      setOpen(false);
-      message.success(editing ? 'Salvo!' : 'Negócio criado!');
-    },
+      editingBiz ? api.updateBusiness(editingBiz._id, values) : api.createBusiness(values),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); setBizOpen(false); message.success(editingBiz ? 'Salvo!' : 'Negócio criado!'); },
     onError: (e: Error) => message.error(e.message),
   });
 
   const deleteBiz = useMutation({
     mutationFn: (id: string) => api.deleteBusiness(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['businesses'] });
-      setDeleteTarget(null);
-      message.success('Negócio removido.');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); setDeleteTarget(null); message.success('Negócio removido.'); },
     onError: (e: Error) => message.error(e.message),
   });
 
   const addInstance = useMutation({
-    mutationFn: ({ id, instanceName }: { id: string; instanceName: string }) =>
-      api.addInstance(id, { instanceName }),
+    mutationFn: ({ id, instanceName }: { id: string; instanceName: string }) => api.addInstance(id, { instanceName }),
     onSuccess: (updated) => {
       qc.invalidateQueries({ queryKey: ['businesses'] });
       setAddInstOpen(false);
       addInstForm.resetFields();
       const biz = updated as Business;
       if (connectAfterRef.current) {
-        const instName = (biz.instances ?? []).at(-1) ?? '';
-        openQrModal(biz, instName);
+        openQrModal(biz, (biz.instances ?? []).at(-1) ?? '');
       } else {
         message.success('Número adicionado!');
         bumpRefreshKey(biz._id);
@@ -200,18 +276,40 @@ export default function Businesses() {
     onError: (e: Error) => message.error(e.message),
   });
 
-  // ── QR helpers ───────────────────────────────────────────────────────────────
+  const createAgent = useMutation({
+    mutationFn: ({ bizId, data }: { bizId: string; data: Partial<Agent> }) => api.createAgent(bizId, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); setAgentOpen(false); message.success('Agente criado!'); },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const updateAgent = useMutation({
+    mutationFn: ({ bizId, agentId, data }: { bizId: string; agentId: string; data: Partial<Agent> }) =>
+      api.updateAgent(bizId, agentId, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); setAgentOpen(false); message.success('Agente salvo!'); },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const deleteAgent = useMutation({
+    mutationFn: ({ bizId, agentId }: { bizId: string; agentId: string }) => api.deleteAgent(bizId, agentId),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['businesses'] }); message.success('Agente removido.'); },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const assignAgent = useMutation({
+    mutationFn: ({ bizId, instanceName, agentId }: { bizId: string; instanceName: string; agentId: string | null }) =>
+      api.assignAgent(bizId, instanceName, agentId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['businesses'] }),
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  // QR helpers
 
   const bumpRefreshKey = (bizId: string) =>
     setInstanceRefreshKeys(prev => ({ ...prev, [bizId]: (prev[bizId] ?? 0) + 1 }));
 
   const fetchQr = async (id: string, instanceName: string) => {
-    setQrLoading(true);
-    setQrBase64(null);
-    try {
-      const d = await api.getBusinessQr(id, instanceName);
-      setQrBase64(d.base64);
-    } catch { /* ignore */ }
+    setQrLoading(true); setQrBase64(null);
+    try { const d = await api.getBusinessQr(id, instanceName); setQrBase64(d.base64); } catch { /* ignore */ }
     setQrLoading(false);
   };
 
@@ -224,7 +322,6 @@ export default function Businesses() {
           setQrConnected(true);
           clearInterval(qrStatusRef.current!);
           clearInterval(qrRefreshRef.current!);
-          // Pequeno delay para Evolution estabilizar antes do painel re-buscar
           setTimeout(() => bumpRefreshKey(id), 1500);
         }
       } catch { /* ignore */ }
@@ -234,11 +331,7 @@ export default function Businesses() {
   };
 
   const openQrModal = (b: Business, instanceName: string) => {
-    setQrBusiness(b);
-    setQrInstanceName(instanceName);
-    setQrConnected(false);
-    setQrBase64(null);
-    setQrOpen(true);
+    setQrBusiness(b); setQrInstanceName(instanceName); setQrConnected(false); setQrBase64(null); setQrOpen(true);
     fetchQr(b._id, instanceName);
     startQrPolling(b._id, instanceName);
   };
@@ -255,13 +348,10 @@ export default function Businesses() {
     if (qrStatusRef.current) clearInterval(qrStatusRef.current);
   }, []);
 
-  // ── Send-link helpers ─────────────────────────────────────────────────────────
+  // Send-link helpers
 
   const openSendLink = (b: Business, instanceName: string) => {
-    setLinkTarget({ business: b, instanceName });
-    setLinkEmail('');
-    setLinkUrl(null);
-    setLinkOpen(true);
+    setLinkTarget({ business: b, instanceName }); setLinkEmail(''); setLinkUrl(null); setLinkOpen(true);
   };
 
   const generateLink = async () => {
@@ -275,35 +365,44 @@ export default function Businesses() {
     finally { setLinkLoading(false); }
   };
 
-  // ── Handlers ─────────────────────────────────────────────────────────────────
+  // Agent modal helpers
 
-  const openCreate = () => { form.resetFields(); setEditing(null); setOpen(true); };
-  const openEdit = (b: Business) => { form.setFieldsValue(b); setEditing(b); setOpen(true); };
-
-  const openAddInstance = (b: Business) => {
-    setAddInstTarget(b);
-    addInstForm.resetFields();
-    setAddInstOpen(true);
+  const openAddAgent = (b: Business) => {
+    setAgentBiz(b); setEditingAgent(null);
+    agentForm.setFieldsValue({
+      name: '', assistantName: '', model: 'google/gemini-2.5-flash-lite', systemPrompt: '',
+      settings: { maxHistoryTokens: 500_000, tools: { searchMemory: true } },
+    });
+    setAgentOpen(true);
   };
 
-  const submitAddInstance = (connectAfter: boolean) => {
-    addInstForm.validateFields().then(vals => {
-      if (!addInstTarget) return;
-      connectAfterRef.current = connectAfter;
-      addInstance.mutate({ id: addInstTarget._id, instanceName: vals.instanceName });
+  const openEditAgent = (b: Business, agent: Agent) => {
+    setAgentBiz(b); setEditingAgent(agent);
+    agentForm.setFieldsValue(agent);
+    setAgentOpen(true);
+  };
+
+  const submitAgent = () => {
+    agentForm.validateFields().then(vals => {
+      if (!agentBiz) return;
+      if (editingAgent) {
+        updateAgent.mutate({ bizId: agentBiz._id, agentId: editingAgent._id, data: vals });
+      } else {
+        createAgent.mutate({ bizId: agentBiz._id, data: vals });
+      }
     });
   };
 
-  // ── Table ────────────────────────────────────────────────────────────────────
+  // Table
 
   const cols = [
     { title: 'Nome', dataIndex: 'name', key: 'name' },
     {
-      title: 'Ações', key: 'actions', align: 'right' as const,
+      title: 'Acoes', key: 'actions', align: 'right' as const,
       render: (_: unknown, b: Business) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(b)}>Editar</Button>
-          <Button size="small" icon={<PlusOutlined />} onClick={() => openAddInstance(b)}>+ WhatsApp</Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => { bizForm.setFieldsValue({ name: b.name }); setEditingBiz(b); setBizOpen(true); }}>Editar</Button>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => { setAddInstTarget(b); addInstForm.resetFields(); setAddInstOpen(true); }}>+ WhatsApp</Button>
           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => { setDeleteTarget(b); setDeleteInput(''); }}>Excluir</Button>
         </Space>
       ),
@@ -313,165 +412,172 @@ export default function Businesses() {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={3} style={{ margin: 0 }}>Negócios</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Novo negócio</Button>
+        <H3 level={3} style={{ margin: 0 }}>Negocios</H3>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => { bizForm.resetFields(); setEditingBiz(null); setBizOpen(true); }}>Novo negocio</Button>
       </div>
 
       <Table
-        rowKey="_id"
-        dataSource={data}
-        columns={cols}
-        loading={isLoading}
-        pagination={{ pageSize: 20 }}
+        rowKey="_id" dataSource={data} columns={cols} loading={isLoading} pagination={{ pageSize: 20 }}
         expandable={{
           expandedRowKeys,
           onExpand: (expanded, record) =>
-            setExpandedRowKeys(prev =>
-              expanded ? [...prev, record._id] : prev.filter(k => k !== record._id)
-            ),
+            setExpandedRowKeys(prev => expanded ? [...prev, record._id] : prev.filter(k => k !== record._id)),
           expandedRowRender: (b) => (
-            <InstancesPanel
-              business={b}
-              refreshKey={instanceRefreshKeys[b._id] ?? 0}
-              onConnect={openQrModal}
-              onSendLink={openSendLink}
-            />
+            <div style={{ background: '#fafafa', borderRadius: 6, margin: '4px 0' }}>
+              <AgentsSection
+                business={b}
+                onAdd={() => openAddAgent(b)}
+                onEdit={(agent) => openEditAgent(b, agent)}
+                onDelete={(agentId) => deleteAgent.mutate({ bizId: b._id, agentId })}
+              />
+              <Divider style={{ margin: '8px 0' }} />
+              <InstancesPanel
+                business={b}
+                refreshKey={instanceRefreshKeys[b._id] ?? 0}
+                onConnect={openQrModal}
+                onSendLink={openSendLink}
+                onAssignAgent={(instanceName, agentId) => assignAgent.mutate({ bizId: b._id, instanceName, agentId })}
+              />
+            </div>
           ),
         }}
       />
 
-      {/* ── Criar / Editar */}
+      {/* Criar / Editar negocio */}
       <Modal
-        title={editing ? 'Editar negócio' : 'Novo negócio'}
-        open={open}
-        onOk={() => form.validateFields().then(vals => save.mutate(vals))}
-        onCancel={() => setOpen(false)}
-        confirmLoading={save.isPending}
-        okText={editing ? 'Salvar' : 'Criar'}
+        title={editingBiz ? 'Editar negocio' : 'Novo negocio'}
+        open={bizOpen} onOk={() => bizForm.validateFields().then(vals => saveBiz.mutate(vals))}
+        onCancel={() => setBizOpen(false)} confirmLoading={saveBiz.isPending}
+        okText={editingBiz ? 'Salvar' : 'Criar'}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
-          <Form.Item name="name" label="Nome" rules={[{ required: true }]}>
+        <Form form={bizForm} layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item name="name" label="Nome do negocio" rules={[{ required: true }]}>
             <Input placeholder="Ex: Loja da Maria" />
           </Form.Item>
         </Form>
       </Modal>
 
-      {/* ── + WhatsApp */}
+      {/* + WhatsApp */}
       <Modal
-        title="+ WhatsApp"
-        open={addInstOpen}
-        onCancel={() => setAddInstOpen(false)}
+        title="Adicionar numero WhatsApp"
+        open={addInstOpen} onCancel={() => setAddInstOpen(false)}
         footer={[
           <Button key="cancel" onClick={() => setAddInstOpen(false)}>Cancelar</Button>,
-          <Button key="create" loading={addInstance.isPending} onClick={() => submitAddInstance(false)}>Criar</Button>,
-          <Button key="connect" type="primary" loading={addInstance.isPending} onClick={() => submitAddInstance(true)}>Criar e conectar</Button>,
+          <Button key="create" loading={addInstance.isPending} onClick={() => {
+            addInstForm.validateFields().then(vals => { if (!addInstTarget) return; connectAfterRef.current = false; addInstance.mutate({ id: addInstTarget._id, instanceName: vals.instanceName }); });
+          }}>Criar</Button>,
+          <Button key="connect" type="primary" loading={addInstance.isPending} onClick={() => {
+            addInstForm.validateFields().then(vals => { if (!addInstTarget) return; connectAfterRef.current = true; addInstance.mutate({ id: addInstTarget._id, instanceName: vals.instanceName }); });
+          }}>Criar e conectar</Button>,
         ]}
-        width={400}
+        width={420}
       >
         <Form form={addInstForm} layout="vertical" style={{ marginTop: 8 }}>
-          <Form.Item
-            name="instanceName"
-            label="Nome da instância"
-            rules={[
-              { required: true, message: 'Informe o nome' },
-              { pattern: /^[a-z0-9-]+$/, message: 'Use apenas letras minúsculas, números e hífen' },
-            ]}
+          <Form.Item name="instanceName" label="Identificador da instancia"
+            help="Apenas letras minusculas, numeros e hifen (ex: loja-maria)"
+            rules={[{ required: true }, { pattern: /^[a-z0-9-]+$/, message: 'Apenas letras minusculas, numeros e hifen' }]}
           >
             <Input placeholder="loja-maria" />
           </Form.Item>
         </Form>
       </Modal>
 
-      {/* ── Excluir negócio */}
+      {/* Agente (criar / editar) */}
       <Modal
-        title="Excluir negócio"
-        open={!!deleteTarget}
-        onCancel={() => setDeleteTarget(null)}
-        okText="Excluir"
-        okButtonProps={{ danger: true, disabled: deleteInput !== deleteTarget?.name, loading: deleteBiz.isPending }}
-        onOk={() => deleteTarget && deleteBiz.mutate(deleteTarget._id)}
-        cancelText="Cancelar"
+        title={editingAgent ? `Editar agente` : 'Novo agente'}
+        open={agentOpen} onOk={submitAgent} onCancel={() => setAgentOpen(false)}
+        confirmLoading={createAgent.isPending || updateAgent.isPending}
+        okText={editingAgent ? 'Salvar' : 'Criar agente'} width={620} destroyOnClose
       >
-        <p>Esta ação é irreversível. Serão removidos: instâncias WhatsApp, caixa de entrada, conversas e clientes deste negócio.</p>
-        <p>Digite <strong>{deleteTarget?.name}</strong> para confirmar:</p>
-        <Input
-          value={deleteInput}
-          onChange={e => setDeleteInput(e.target.value)}
-          placeholder={deleteTarget?.name}
-          onPressEnter={() => deleteInput === deleteTarget?.name && deleteTarget && deleteBiz.mutate(deleteTarget._id)}
-        />
+        <Form form={agentForm} layout="vertical" style={{ marginTop: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="name" label="Nome do agente" rules={[{ required: true }]}>
+              <Input placeholder="Ex: Suporte, Vendas, Agendamentos" />
+            </Form.Item>
+            <Form.Item name="assistantName" label="Nome do assistente" rules={[{ required: true }]}>
+              <Input placeholder="Ex: Ana, Carlos, Bot" />
+            </Form.Item>
+          </div>
+          <Form.Item
+            name="model" label="Modelo de IA" rules={[{ required: true }]}
+            help={<span>Digite ou selecione. Ver todos em <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer">openrouter.ai/models</a></span>}
+          >
+            <AutoComplete
+              options={POPULAR_MODELS}
+              filterOption={(input, option) => (option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+              placeholder="google/gemini-2.5-flash-lite"
+            />
+          </Form.Item>
+          <Form.Item name="systemPrompt" label="Prompt do sistema">
+            <Input.TextArea rows={6} placeholder="Voce e um assistente de atendimento da empresa X. Seja cordial e objetivo..." />
+          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name={['settings', 'maxHistoryTokens']} label="Historico maximo (tokens)">
+              <InputNumber min={10_000} max={1_000_000} step={50_000} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name={['settings', 'tools', 'searchMemory']} label="Busca na memoria do cliente" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </div>
+        </Form>
       </Modal>
 
-      {/* ── QR Code */}
+      {/* Excluir negocio */}
       <Modal
-        title={`Conectar WhatsApp${qrInstanceName ? ` — ${qrInstanceName}` : ''}`}
-        open={qrOpen}
-        onCancel={closeQrModal}
+        title="Excluir negocio" open={!!deleteTarget} onCancel={() => setDeleteTarget(null)}
+        okText="Excluir" okButtonProps={{ danger: true, disabled: deleteInput !== deleteTarget?.name, loading: deleteBiz.isPending }}
+        onOk={() => deleteTarget && deleteBiz.mutate(deleteTarget._id)} cancelText="Cancelar"
+      >
+        <p>Esta acao e irreversivel. Serao removidos: instancias WhatsApp, caixa de entrada, conversas e clientes.</p>
+        <p>Digite <strong>{deleteTarget?.name}</strong> para confirmar:</p>
+        <Input value={deleteInput} onChange={e => setDeleteInput(e.target.value)} placeholder={deleteTarget?.name}
+          onPressEnter={() => deleteInput === deleteTarget?.name && deleteTarget && deleteBiz.mutate(deleteTarget._id)} />
+      </Modal>
+
+      {/* QR Code */}
+      <Modal
+        title={`Conectar WhatsApp${qrInstanceName ? ` - ${qrInstanceName}` : ''}`}
+        open={qrOpen} onCancel={closeQrModal}
         footer={qrConnected ? null : [
-          <Button key="refresh" onClick={() => qrBusiness && qrInstanceName && fetchQr(qrBusiness._id, qrInstanceName)} loading={qrLoading}>
-            ↻ Atualizar QR
-          </Button>,
+          <Button key="refresh" onClick={() => qrBusiness && qrInstanceName && fetchQr(qrBusiness._id, qrInstanceName)} loading={qrLoading}>Atualizar QR</Button>,
           <Button key="close" onClick={closeQrModal}>Fechar</Button>,
-        ]}
-        width={380}
+        ]} width={380}
       >
         {qrConnected ? (
           <Result status="success" title="Conectado!" />
         ) : (
           <div style={{ textAlign: 'center', padding: '8px 0' }}>
             <div style={{ width: 280, height: 280, margin: '0 auto 16px', background: '#f9f9f9', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #f0f0f0' }}>
-              {qrLoading
-                ? <Spin size="large" />
-                : qrBase64
-                  ? <img src={qrBase64} alt="QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 10 }} />
-                  : <span style={{ color: '#bbb', fontSize: 13 }}>QR indisponível</span>
-              }
+              {qrLoading ? <Spin size="large" /> : qrBase64
+                ? <img src={qrBase64} alt="QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 10 }} />
+                : <span style={{ color: '#bbb', fontSize: 13 }}>QR indisponivel</span>}
             </div>
-            <p style={{ color: '#666', fontSize: 13 }}>
-              Abra o WhatsApp → <strong>Dispositivos conectados → Conectar dispositivo</strong>
-            </p>
+            <p style={{ color: '#666', fontSize: 13 }}>Abra o WhatsApp <strong>Dispositivos conectados Conectar dispositivo</strong></p>
           </div>
         )}
       </Modal>
 
-      {/* ── Enviar link de conexão */}
-      <Modal
-        title={`Link de conexão${linkTarget ? ` — ${linkTarget.instanceName}` : ''}`}
-        open={linkOpen}
-        onCancel={() => setLinkOpen(false)}
-        footer={null}
-        width={460}
+      {/* Enviar link de conexao */}
+      <Modal title={`Link de conexao${linkTarget ? ` - ${linkTarget.instanceName}` : ''}`}
+        open={linkOpen} onCancel={() => setLinkOpen(false)} footer={null} width={460}
       >
         <div style={{ marginTop: 8 }}>
-          <p style={{ color: '#666', fontSize: 13, marginBottom: 16 }}>
-            Gere um link seguro (válido por 24h) para que alguém conecte o número WhatsApp remotamente.
-          </p>
-          {linkUrl ? (
+          <p style={{ color: '#666', fontSize: 13, marginBottom: 16 }}>Gere um link seguro (valido por 24h) para conectar o numero remotamente.</p>
+          {linkUrl && (
             <div style={{ marginBottom: 16 }}>
               <Input.Group compact>
                 <Input value={linkUrl} readOnly style={{ width: 'calc(100% - 80px)' }} />
-                <Button
-                  icon={<CopyOutlined />}
-                  style={{ width: 80 }}
-                  onClick={() => { navigator.clipboard.writeText(linkUrl); message.success('Copiado!'); }}
-                >
-                  Copiar
-                </Button>
+                <Button icon={<CopyOutlined />} style={{ width: 80 }}
+                  onClick={() => { navigator.clipboard.writeText(linkUrl); message.success('Copiado!'); }}>Copiar</Button>
               </Input.Group>
             </div>
-          ) : null}
-          <Input
-            placeholder="Email (opcional — para enviar o link por email)"
-            value={linkEmail}
-            onChange={e => setLinkEmail(e.target.value)}
-            style={{ marginBottom: 12 }}
-          />
+          )}
+          <Input placeholder="Email (opcional)" value={linkEmail} onChange={e => setLinkEmail(e.target.value)} style={{ marginBottom: 12 }} />
           <Button type="primary" loading={linkLoading} onClick={generateLink} block>
-            {linkUrl ? '↻ Gerar novo link' : 'Gerar link'}
+            {linkUrl ? 'Gerar novo link' : 'Gerar link'}
           </Button>
         </div>
       </Modal>
     </>
   );
 }
-

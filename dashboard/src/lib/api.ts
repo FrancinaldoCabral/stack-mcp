@@ -51,6 +51,16 @@ export const api = {
   disconnectInstance: (bizId: string, instanceName: string) =>
     req<{ ok: boolean }>(`/businesses/${bizId}/instances/${encodeURIComponent(instanceName)}/disconnect`, { method: 'POST' }),
 
+  // Agentes
+  createAgent: (bizId: string, data: Partial<import('./types').Agent>) =>
+    req<import('./types').Business>(`/businesses/${bizId}/agents`, { method: 'POST', body: JSON.stringify(data) }),
+  updateAgent: (bizId: string, agentId: string, data: Partial<import('./types').Agent>) =>
+    req<import('./types').Business>(`/businesses/${bizId}/agents/${agentId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteAgent: (bizId: string, agentId: string) =>
+    req<import('./types').Business>(`/businesses/${bizId}/agents/${agentId}`, { method: 'DELETE' }),
+  assignAgent: (bizId: string, instanceName: string, agentId: string | null) =>
+    req<import('./types').Business>(`/businesses/${bizId}/instances/${encodeURIComponent(instanceName)}/assign-agent`, { method: 'PUT', body: JSON.stringify({ agentId }) }),
+
   // Customers
   getCustomers: (params?: Record<string, string>) => {
     const q = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -85,11 +95,7 @@ export const api = {
     req<{ ok: boolean }>(`/knowledge/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteKnowledge: (id: number) => req<{ ok: boolean }>(`/knowledge/${id}`, { method: 'DELETE' }),
 
-  // Agent config
-  getAgent: (businessId: string) =>
-    req<Pick<import('./types').Business, '_id' | 'assistantName' | 'systemPrompt' | 'settings'>>(`/agents/${businessId}`),
-  updateAgent: (businessId: string, data: Partial<import('./types').Business>) =>
-    req<Pick<import('./types').Business, '_id' | 'assistantName' | 'systemPrompt' | 'settings'>>(`/agents/${businessId}`, { method: 'PUT', body: JSON.stringify(data) }),
+
 };
 
 export { API_KEY };
