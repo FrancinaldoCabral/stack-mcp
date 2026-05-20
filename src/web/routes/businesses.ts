@@ -395,13 +395,54 @@ businessesRouter.post('/:id/provision', async (req, res) => {
   }
 });
 
+// GET /api/businesses/:id/instances-status — status de todas as instâncias
+businessesRouter.get('/:id/instances-status', async (req, res) => {
+  try {
+    const db = await getDb();
+    const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
+    if (!business) return res.status(404).json({ error: 'Not found' });
+    const instances: string[] = (business.instances as string[]) ?? [];
+    const instanceInboxes: Record<string, number> = (business.instanceInboxes as Record<string, number>) ?? {};
+    const statuses = await Promise.all(
+      instances.map(async (name) => {
+        try {
+          const r = await axios.get(`${config.evolution.url}/instance/connectionState/${name}`, {
+            headers: { apikey: config.evolution.apiKey },
+            timeout: 5_000,
+          });
+          const state: string = r.data?.instance?.state ?? r.data?.state ?? 'unknown';
+          return { instanceName: name, status: state, inboxId: instanceInboxes[name] ?? null };
+        } catch {
+          return { instanceName: name, status: 'unknown', inboxId: instanceInboxes[name] ?? null };
+        }
+      }),
+    );
+    res.json(statuses);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// POST /api/businesses/:id/instances/:name/disconnect — logout WhatsApp
+businessesRouter.post('/:id/instances/:name/disconnect', async (req, res) => {
+  try {
+    await axios.delete(`${config.evolution.url}/instance/logout/${req.params.name}`, {
+      headers: { apikey: config.evolution.apiKey },
+      timeout: 10_000,
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    const err = e as { response?: { data?: unknown }; message?: string };
+    const detail = err.response?.data ?? err.message ?? String(e);
+    res.status(500).json({ error: typeof detail === 'string' ? detail : JSON.stringify(detail) });
+  }
+});
+
 // GET /api/businesses/:id/qr — admin: fetch QR code from Evolution
 businessesRouter.get('/:id/qr', async (req, res) => {
   try {
     const db = await getDb();
     const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
     if (!business?.instances?.length) return res.status(404).json({ error: 'Nenhuma instância configurada' });
-    const instanceName = (business.instances as string[])[0];
+    const instanceName = (req.query.instance as string) || (business.instances as string[])[0];
     const r = await axios.get(`${config.evolution.url}/instance/connect/${instanceName}`, {
       headers: { apikey: config.evolution.apiKey },
     });
@@ -419,7 +460,7 @@ businessesRouter.get('/:id/qr-status', async (req, res) => {
     const db = await getDb();
     const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
     if (!business?.instances?.length) return res.status(404).json({ error: 'Nenhuma instância configurada' });
-    const instanceName = (business.instances as string[])[0];
+    const instanceName = (req.query.instance as string) || (business.instances as string[])[0];
     const r = await axios.get(`${config.evolution.url}/instance/connectionState/${instanceName}`, {
       headers: { apikey: config.evolution.apiKey },
     });
@@ -430,17 +471,16 @@ businessesRouter.get('/:id/qr-status', async (req, res) => {
   }
 });
 
-// POST /api/businesses/:id/qr-link — admin: generate link + send email
+// POST /api/businesses/:id/qr-link — gerar link de conexão + email opcional
 businessesRouter.post('/:id/qr-link', async (req, res) => {
   try {
-    const { email } = req.body as { email?: string };
-    if (!email?.trim()) return res.status(400).json({ error: 'email é obrigatório' });
+    const { email, instanceName: reqInst } = req.body as { email?: string; instanceName?: string };
 
     const db = await getDb();
     const business = await db.collection('businesses').findOne({ _id: new ObjectId(req.params.id) });
     if (!business?.instances?.length) return res.status(400).json({ error: 'Negócio não está provisionado' });
 
-    const instanceName = (business.instances as string[])[0];
+    const instanceName = reqInst?.trim() || (business.instances as string[])[0];
     const token = randomUUID();
     const ttl = 86_400; // 24h
 
@@ -456,7 +496,9 @@ businessesRouter.post('/:id/qr-link', async (req, res) => {
     const host = req.get('host') ?? 'localhost';
     const connectUrl = `${protocol}://${host}/connect/${token}`;
 
-    await sendQrLinkEmail(email.trim(), connectUrl, business.name as string);
+    if (email?.trim()) {
+      await sendQrLinkEmail(email.trim(), connectUrl, business.name as string);
+    }
     res.json({ ok: true, connectUrl });
   } catch (e) {
     const err = e as { response?: { data?: unknown }; message?: string };

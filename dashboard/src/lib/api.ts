@@ -40,12 +40,16 @@ export const api = {
     req<import('./types').Business>(`/businesses/${id}/add-instance`, { method: 'POST', body: JSON.stringify(data) }),
   retryChatwoot: (id: string) =>
     req<{ ok: boolean; chatwootInboxId: number }>(`/businesses/${id}/retry-chatwoot`, { method: 'POST' }),
-  getBusinessQr: (id: string) =>
-    req<{ base64: string | null; code: string | null; instanceName: string }>(`/businesses/${id}/qr`),
-  getBusinessQrStatus: (id: string) =>
-    req<{ status: string; instanceName?: string }>(`/businesses/${id}/qr-status`),
-  sendQrLink: (id: string, email: string) =>
-    req<{ ok: boolean; connectUrl: string }>(`/businesses/${id}/qr-link`, { method: 'POST', body: JSON.stringify({ email }) }),
+  getBusinessQr: (id: string, instanceName?: string) =>
+    req<{ base64: string | null; code: string | null; instanceName: string }>(`/businesses/${id}/qr${instanceName ? `?instance=${encodeURIComponent(instanceName)}` : ''}`),
+  getBusinessQrStatus: (id: string, instanceName?: string) =>
+    req<{ status: string; instanceName?: string }>(`/businesses/${id}/qr-status${instanceName ? `?instance=${encodeURIComponent(instanceName)}` : ''}`),
+  sendQrLink: (id: string, instanceName: string, email?: string) =>
+    req<{ ok: boolean; connectUrl: string }>(`/businesses/${id}/qr-link`, { method: 'POST', body: JSON.stringify({ instanceName, email }) }),
+  getInstancesStatus: (id: string) =>
+    req<{ instanceName: string; status: string; inboxId: number | null }[]>(`/businesses/${id}/instances-status`),
+  disconnectInstance: (bizId: string, instanceName: string) =>
+    req<{ ok: boolean }>(`/businesses/${bizId}/instances/${encodeURIComponent(instanceName)}/disconnect`, { method: 'POST' }),
 
   // Customers
   getCustomers: (params?: Record<string, string>) => {
