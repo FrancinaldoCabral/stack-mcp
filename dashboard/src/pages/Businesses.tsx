@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Button, Table, Modal, Form, Input, Space, Typography, message,
-  Spin, Result, Badge, Tooltip, AutoComplete, InputNumber, Switch,
+  Spin, Result, Badge, Tooltip, AutoComplete,
   Select, Popconfirm, Divider, Tag,
 } from 'antd';
 import {
@@ -370,8 +370,26 @@ export default function Businesses() {
   const openAddAgent = (b: Business) => {
     setAgentBiz(b); setEditingAgent(null);
     agentForm.setFieldsValue({
-      name: '', assistantName: '', model: 'google/gemini-2.5-flash-lite', systemPrompt: '',
-      settings: { maxHistoryTokens: 500_000, tools: { searchMemory: true } },
+      name: '', assistantName: 'Vendly', model: 'google/gemini-2.5-flash-lite',
+      systemPrompt: `Você é Vendly, assistente virtual da {{nome_da_empresa}}.
+
+## Papel
+Atendo clientes pelo WhatsApp com cordialidade e agilidade, respondendo dúvidas e auxiliando em tudo que precisarem.
+
+## O que posso ajudar
+- Dúvidas sobre produtos e serviços
+- Informações sobre pedidos e entregas
+- Agendamentos e reservas
+- Suporte e resolução de problemas
+
+## Como me comporto
+- Respondo de forma curta e direta (1 a 3 parágrafos)
+- Uso linguagem natural, como numa conversa humana
+- Nunca invento informações — se não sei, digo que vou verificar
+- Trato cada cliente pelo nome quando disponível
+
+## Sobre o negócio
+[Descreva aqui: produtos, serviços, horários de atendimento, endereço, políticas de troca, etc.]`,
     });
     setAgentOpen(true);
   };
@@ -509,16 +527,8 @@ export default function Businesses() {
             />
           </Form.Item>
           <Form.Item name="systemPrompt" label="Prompt do sistema">
-            <Input.TextArea rows={6} placeholder="Voce e um assistente de atendimento da empresa X. Seja cordial e objetivo..." />
+            <Input.TextArea rows={10} />
           </Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
-            <Form.Item name={['settings', 'maxHistoryTokens']} label="Historico maximo (tokens)">
-              <InputNumber min={10_000} max={1_000_000} step={50_000} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item name={['settings', 'tools', 'searchMemory']} label="Busca na memoria do cliente" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-          </div>
         </Form>
       </Modal>
 
