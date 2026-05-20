@@ -217,17 +217,9 @@ businessesRouter.post('/:id/add-instance', async (req, res) => {
       { headers: { apikey: config.evolution.apiKey }, timeout: 10_000 },
     );
 
-    // Criar inbox Chatwoot para esta instância específica
+    // Integração nativa Evolution → Chatwoot (autoCreate cria a inbox automaticamente)
     let instanceChatwootInboxId: number | undefined;
     try {
-      const inboxRes = await axios.post(
-        `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes`,
-        { name: iName, channel: { type: 'api', webhook_url: '' } },
-        { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 12_000 },
-      );
-      instanceChatwootInboxId = inboxRes.data.id as number;
-
-      // Integração nativa Evolution → Chatwoot (sem autoCreate pois inbox já existe)
       await axios.post(
         `${config.evolution.url}/chatwoot/set/${iName}`,
         {
@@ -244,13 +236,22 @@ businessesRouter.post('/:id/add-instance', async (req, res) => {
           importMessages: false,
           daysLimitImportMessages: 0,
           signDelimiter: '\n',
-          autoCreate: false,
+          autoCreate: true,
           organization: '',
           logo: '',
           ignoreJids: [],
         },
         { headers: { apikey: config.evolution.apiKey }, timeout: 12_000 },
       );
+
+      // Buscar inbox criada pela Evolution para guardar o ID
+      const inboxesRes = await axios.get(
+        `${config.chatwoot.url}/api/v1/accounts/${config.chatwoot.accountId}/inboxes`,
+        { headers: { api_access_token: config.chatwoot.apiKey }, timeout: 8_000 },
+      );
+      const inboxes = (inboxesRes.data?.payload ?? []) as { id: number; name: string }[];
+      const inbox = inboxes.find(i => i.name === iName);
+      if (inbox) instanceChatwootInboxId = inbox.id;
 
       // Garantir webhook de conta Chatwoot → N8N (idempotente)
       const handoffUrl = `${config.n8n.url}/webhook/chatwoot-events`;
