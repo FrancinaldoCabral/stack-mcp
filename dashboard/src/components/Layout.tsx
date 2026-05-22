@@ -11,6 +11,7 @@ import {
   KeyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  CarOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getApiKey, setApiKey } from '../lib/api';
@@ -25,6 +26,7 @@ const menuItems = [
   { key: '/conversations', icon: <MessageOutlined />, label: 'Conversas' },
   { key: '/analytics', icon: <BarChartOutlined />, label: 'Analytics' },
   { key: '/knowledge', icon: <BookOutlined />, label: 'Base de Conhecimento' },
+  { key: '/delivery', icon: <CarOutlined />, label: 'Delivery' },
 ];
 
 interface Props { children: React.ReactNode }

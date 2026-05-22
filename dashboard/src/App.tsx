@@ -6,6 +6,7 @@ import Customers from './pages/Customers';
 import Conversations from './pages/Conversations';
 import Analytics from './pages/Analytics';
 import KnowledgeBase from './pages/KnowledgeBase';
+import Delivery from './pages/Delivery';
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="/conversations" element={<Conversations />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/knowledge" element={<KnowledgeBase />} />
+          <Route path="/delivery" element={<Delivery />} />
         </Routes>
       </Layout>
     </BrowserRouter>

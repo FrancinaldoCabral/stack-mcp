@@ -99,7 +99,25 @@ export const api = {
     req<{ ok: boolean }>(`/knowledge/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteKnowledge: (id: number) => req<{ ok: boolean }>(`/knowledge/${id}`, { method: 'DELETE' }),
 
+  // Delivery
+  getDeliveryRestaurants: () => req<import('./types').DeliveryRestaurant[]>('/delivery/restaurants'),
+  createDeliveryRestaurant: (data: Partial<import('./types').DeliveryRestaurant>) =>
+    req<import('./types').DeliveryRestaurant>('/delivery/restaurants', { method: 'POST', body: JSON.stringify(data) }),
+  updateDeliveryRestaurant: (id: string, data: Partial<import('./types').DeliveryRestaurant>) =>
+    req<import('./types').DeliveryRestaurant>(`/delivery/restaurants/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteDeliveryRestaurant: (id: string) => req<{ ok: boolean }>(`/delivery/restaurants/${id}`, { method: 'DELETE' }),
 
+  getDeliveryOrders: (params?: Record<string, string>) => {
+    const q = params ? '?' + new URLSearchParams(params).toString() : '';
+    return req<{ data: import('./types').DeliveryOrder[]; total: number }>(`/delivery/orders${q}`);
+  },
+
+  getDeliverySettlements: (params?: Record<string, string>) => {
+    const q = params ? '?' + new URLSearchParams(params).toString() : '';
+    return req<{ data: import('./types').DeliverySettlement[]; total: number }>(`/delivery/settlements${q}`);
+  },
+  updateDeliverySettlement: (id: string, data: { status: string }) =>
+    req<import('./types').DeliverySettlement>(`/delivery/settlements/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 };
 
 export { API_KEY };
