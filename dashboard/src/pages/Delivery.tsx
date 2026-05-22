@@ -52,7 +52,7 @@ function RestaurantsTab() {
   const openAdd = () => { form.resetFields(); setAdding(true); };
   const openEdit = (r: DeliveryRestaurant) => {
     form.setFieldsValue({
-      name: r.name, instance: r.instance,
+      name: r.name, 
       commandGroupJid: r.commandGroupJid,
       delivererGroupJid: r.delivererGroupJid,
       active: r.active,
@@ -83,7 +83,6 @@ function RestaurantsTab() {
 
   const cols = [
     { title: 'Nome', dataIndex: 'name', key: 'name', sorter: (a: DeliveryRestaurant, b: DeliveryRestaurant) => a.name.localeCompare(b.name) },
-    { title: 'Instância', dataIndex: 'instance', key: 'instance', render: (v: string) => v || <Text type="secondary">—</Text> },
     {
       title: 'JID Grupo Comandos', dataIndex: 'commandGroupJid', key: 'cmdJid',
       render: (v: string) => <code style={{ fontSize: 11 }}>{v}</code>,
@@ -142,9 +141,6 @@ function RestaurantsTab() {
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="Nome do Restaurante" rules={[{ required: true }]}>
             <Input placeholder="Ex: Tsuki Ramen" />
-          </Form.Item>
-          <Form.Item name="instance" label="Instância WhatsApp">
-            <Input placeholder="Ex: suporte-redatudo" />
           </Form.Item>
           <Form.Item
             name="commandGroupJid"

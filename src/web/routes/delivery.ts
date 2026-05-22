@@ -17,13 +17,12 @@ deliveryRouter.get('/restaurants', async (_req, res) => {
 deliveryRouter.post('/restaurants', async (req, res) => {
   try {
     const db = await getDb();
-    const { name, instance, commandGroupJid, delivererGroupJid } = req.body as Record<string, string>;
+    const { name, commandGroupJid, delivererGroupJid } = req.body as Record<string, string>;
     if (!name || !commandGroupJid || !delivererGroupJid) {
       return res.status(400).json({ error: 'name, commandGroupJid e delivererGroupJid são obrigatórios' });
     }
     const doc = {
       name,
-      instance: instance ?? '',
       commandGroupJid,
       delivererGroupJid,
       active: true,
@@ -38,10 +37,9 @@ deliveryRouter.post('/restaurants', async (req, res) => {
 deliveryRouter.put('/restaurants/:id', async (req, res) => {
   try {
     const db = await getDb();
-    const { name, instance, commandGroupJid, delivererGroupJid, active } = req.body as Record<string, unknown>;
+    const { name, commandGroupJid, delivererGroupJid, active } = req.body as Record<string, unknown>;
     const update: Record<string, unknown> = { updatedAt: new Date() };
     if (name !== undefined) update.name = name;
-    if (instance !== undefined) update.instance = instance;
     if (commandGroupJid !== undefined) update.commandGroupJid = commandGroupJid;
     if (delivererGroupJid !== undefined) update.delivererGroupJid = delivererGroupJid;
     if (active !== undefined) update.active = active;

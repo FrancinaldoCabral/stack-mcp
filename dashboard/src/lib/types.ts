@@ -69,7 +69,6 @@ export interface KnowledgePoint {
 export interface DeliveryRestaurant {
   _id: string;
   name: string;
-  instance: string;
   commandGroupJid: string;
   delivererGroupJid: string;
   active: boolean;
