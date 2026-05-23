@@ -103,8 +103,33 @@ async function main() {
     webApp.use('/api', apiRouter);
     webApp.use('/connect', connectRouter); // public QR connect page (no auth)
     webApp.use(express.static(publicDir));
+
+    // ── Utilitário: baixa arquivo e retorna base64 (para N8N que não consegue binary em Code node) ─
+    webApp.get('/util/audio-base64', async (req, res) => {
+      const url = req.query.url as string;
+      if (!url) { res.status(400).json({ error: 'url required' }); return; }
+      // Segurança: só permite URLs do Chatwoot
+      try {
+        const parsed = new URL(url);
+        const allowed = new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname;
+        if (parsed.hostname !== allowed) { res.status(403).json({ error: 'URL não permitida' }); return; }
+      } catch { res.status(400).json({ error: 'URL inválida' }); return; }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      try {
+        const r = await fetch(url, { signal: controller.signal });
+        if (!r.ok) { res.status(502).json({ error: `upstream ${r.status}` }); return; }
+        const buf = Buffer.from(await r.arrayBuffer());
+        res.json({ base64: buf.toString('base64'), size: buf.length });
+      } catch (err) {
+        res.status(500).json({ error: String(err) });
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+
     // SPA fallback — serve index.html for all non-API routes
-    webApp.get(/^\/(?!api|mcp|health).*/, (_req, webRes) => {
+    webApp.get(/^\/(?!api|mcp|health|util).*/, (_req, webRes) => {
       webRes.sendFile(path.join(publicDir, 'index.html'));
     });
 
