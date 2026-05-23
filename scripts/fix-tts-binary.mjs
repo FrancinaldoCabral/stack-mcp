@@ -21,6 +21,10 @@ ttsNode.typeVersion = 4.2;
 ttsNode.parameters = {
   method: 'POST',
   url: `${MCP_URL}/util/tts`,
+  // Usa credencial OpenRouter para injetar Authorization: Bearer <key>
+  // O MCP /util/tts lê o header e passa ao OpenRouter TTS API
+  authentication: 'genericCredentialType',
+  genericAuthType: 'httpHeaderAuth',
   sendBody: true,
   specifyBody: 'json',
   jsonBody: '={{ JSON.stringify({ text: $json.fullText, voice: \'alloy\' }) }}',
@@ -28,8 +32,7 @@ ttsNode.parameters = {
     response: { response: { neverError: true } },
   },
 };
-// remover credentials — endpoint MCP não precisa de auth
-delete ttsNode.credentials;
+ttsNode.credentials = { httpHeaderAuth: { id: 'H0XlPAbxjEUzplW4', name: 'OpenRouter' } };
 
 // 2. Extrair B64 TTS → lê $json.base64 diretamente (JSON, não binary)
 const extractNode = wf.nodes.find(n => n.id === 'extract-b64-tts');

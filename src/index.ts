@@ -132,8 +132,11 @@ async function main() {
     webApp.post('/util/tts', async (req, res) => {
       const { text, voice = 'alloy', model = 'openai/gpt-4o-mini-tts' } = req.body ?? {};
       if (!text) { res.status(400).json({ error: 'text required' }); return; }
-      const apiKey = process.env.OPENROUTER_API_KEY;
-      if (!apiKey) { res.status(500).json({ error: 'OPENROUTER_API_KEY not set' }); return; }
+      // Aceita chave via Authorization header (N8N injeta via credencial) ou env var
+      const authHeader = req.headers.authorization;
+      const apiKey = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
+        ?? process.env.OPENROUTER_API_KEY;
+      if (!apiKey) { res.status(500).json({ error: 'no OpenRouter API key available' }); return; }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 30_000);
       try {
