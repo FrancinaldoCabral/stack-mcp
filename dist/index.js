@@ -90,8 +90,82 @@ async function main() {
         webApp.use('/api', apiRouter);
         webApp.use('/connect', connectRouter); // public QR connect page (no auth)
         webApp.use(express.static(publicDir));
+        // ── Utilitário: baixa arquivo e retorna base64 (para N8N que não consegue binary em Code node) ─
+        webApp.get('/util/audio-base64', async (req, res) => {
+            const url = req.query.url;
+            if (!url) {
+                res.status(400).json({ error: 'url required' });
+                return;
+            }
+            // Segurança: só permite URLs do Chatwoot
+            try {
+                const parsed = new URL(url);
+                const allowed = new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname;
+                if (parsed.hostname !== allowed) {
+                    res.status(403).json({ error: 'URL não permitida' });
+                    return;
+                }
+            }
+            catch {
+                res.status(400).json({ error: 'URL inválida' });
+                return;
+            }
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 15_000);
+            try {
+                const r = await fetch(url, { signal: controller.signal });
+                if (!r.ok) {
+                    res.status(502).json({ error: `upstream ${r.status}` });
+                    return;
+                }
+                const buf = Buffer.from(await r.arrayBuffer());
+                res.json({ base64: buf.toString('base64'), size: buf.length });
+            }
+            catch (err) {
+                res.status(500).json({ error: String(err) });
+            }
+            finally {
+                clearTimeout(timer);
+            }
+        });
+        // ── Utilitário: chama OpenRouter TTS e retorna base64 (N8N não consegue binary em Code node) ─
+        webApp.post('/util/tts', async (req, res) => {
+            const { text, voice = 'alloy', model = 'openai/gpt-4o-mini-tts' } = req.body ?? {};
+            if (!text) {
+                res.status(400).json({ error: 'text required' });
+                return;
+            }
+            const apiKey = process.env.OPENROUTER_API_KEY;
+            if (!apiKey) {
+                res.status(500).json({ error: 'OPENROUTER_API_KEY not set' });
+                return;
+            }
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 30_000);
+            try {
+                const r = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+                    method: 'POST',
+                    signal: controller.signal,
+                    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model, input: text, voice, response_format: 'mp3' }),
+                });
+                if (!r.ok) {
+                    const errBody = await r.text();
+                    res.status(502).json({ error: `OpenRouter TTS ${r.status}`, detail: errBody });
+                    return;
+                }
+                const buf = Buffer.from(await r.arrayBuffer());
+                res.json({ base64: buf.toString('base64'), size: buf.length });
+            }
+            catch (err) {
+                res.status(500).json({ error: String(err) });
+            }
+            finally {
+                clearTimeout(timer);
+            }
+        });
         // SPA fallback — serve index.html for all non-API routes
-        webApp.get(/^\/(?!api|mcp|health).*/, (_req, webRes) => {
+        webApp.get(/^\/(?!api|mcp|health|util).*/, (_req, webRes) => {
             webRes.sendFile(path.join(publicDir, 'index.html'));
         });
         const httpServer = createServer(async (req, res) => {
