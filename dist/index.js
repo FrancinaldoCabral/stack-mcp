@@ -130,7 +130,7 @@ async function main() {
         });
         // ── Utilitário: chama OpenRouter TTS e retorna base64 (N8N não consegue binary em Code node) ─
         webApp.post('/util/tts', async (req, res) => {
-            const { text, voice = 'alloy', model = 'openai/gpt-4o-mini-tts-2025-12-15' } = req.body ?? {};
+            const { text, voice = process.env.VOICE_TTS || 'alloy', model = process.env.MODEL_TTS || 'openai/gpt-4o-mini-tts-2025-12-15' } = req.body ?? {};
             if (!text) {
                 res.status(400).json({ error: 'text required' });
                 return;

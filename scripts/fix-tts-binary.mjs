@@ -27,7 +27,7 @@ ttsNode.parameters = {
   genericAuthType: 'httpHeaderAuth',
   sendBody: true,
   specifyBody: 'json',
-  jsonBody: '={{ JSON.stringify({ text: $json.fullText, voice: \'alloy\', model: \'openai/gpt-4o-mini-tts-2025-12-15\' }) }}',
+  jsonBody: '={{ JSON.stringify({ text: $json.fullText }) }}',
   options: {
     response: { response: { neverError: true } },
   },
