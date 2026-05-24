@@ -160,6 +160,75 @@ async function main() {
       }
     });
 
+    // ── Utilitário: transcreve áudio via OpenRouter multimodal ──────────────────────────────────
+    webApp.post('/util/transcribe', async (req, res) => {
+      const { url, base64: inBase64, mimeType: inMimeType = 'audio/ogg' } = req.body ?? {};
+      if (!url && !inBase64) { res.status(400).json({ error: 'url or base64 required' }); return; }
+      const authHeader = req.headers.authorization;
+      const apiKey = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
+        ?? process.env.OPENROUTER_API_KEY;
+      if (!apiKey) { res.status(500).json({ error: 'no OpenRouter API key' }); return; }
+
+      let audioBase64: string | undefined = inBase64 as string | undefined;
+      let mimeType: string = inMimeType as string;
+
+      if (!audioBase64 && url) {
+        try {
+          const parsed = new URL(url as string);
+          const allowedHosts = [
+            new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname,
+            new URL(process.env.EVOLUTION_URL ?? 'https://evolution.vendly.chat').hostname,
+          ];
+          if (!allowedHosts.includes(parsed.hostname)) {
+            res.status(403).json({ error: 'URL não permitida' }); return;
+          }
+        } catch { res.status(400).json({ error: 'URL inválida' }); return; }
+
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 15_000);
+        try {
+          const r = await fetch(url as string, { signal: ctrl.signal });
+          if (!r.ok) { res.status(502).json({ error: `download ${r.status}` }); return; }
+          const buf = Buffer.from(await r.arrayBuffer());
+          audioBase64 = buf.toString('base64');
+          const ct = r.headers.get('content-type');
+          if (ct && ct.startsWith('audio/')) mimeType = ct.split(';')[0].trim();
+        } catch (err) {
+          res.status(500).json({ error: `download: ${String(err)}` }); return;
+        } finally { clearTimeout(t); }
+      }
+
+      const model = process.env.OPENROUTER_MULTIMODAL_MODEL ?? 'google/gemini-2.0-flash-lite-001';
+      const ctrl2 = new AbortController();
+      const t2 = setTimeout(() => ctrl2.abort(), 30_000);
+      try {
+        const r2 = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          signal: ctrl2.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Transcreva este áudio para texto em português. Retorne SOMENTE o texto transcrito, sem comentários adicionais.' },
+                { type: 'image_url', image_url: { url: `data:${mimeType};base64,${audioBase64}` } },
+              ],
+            }],
+          }),
+        });
+        if (!r2.ok) {
+          const errBody = await r2.text();
+          res.status(502).json({ error: `OpenRouter ${r2.status}`, detail: errBody }); return;
+        }
+        const data = await r2.json() as { choices?: Array<{ message?: { content?: string } }> };
+        const transcription = data.choices?.[0]?.message?.content ?? '';
+        res.json({ transcription, model });
+      } catch (err) {
+        res.status(500).json({ error: String(err) });
+      } finally { clearTimeout(t2); }
+    });
+
     // SPA fallback — serve index.html for all non-API routes
     webApp.get(/^\/(?!api|mcp|health|util).*/, (_req, webRes) => {
       webRes.sendFile(path.join(publicDir, 'index.html'));
