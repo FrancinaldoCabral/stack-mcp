@@ -173,13 +173,14 @@ async function main() {
       let mimeType: string = inMimeType as string;
 
       if (!audioBase64 && url) {
+        let parsedUrl: URL;
         try {
-          const parsed = new URL(url as string);
+          parsedUrl = new URL(url as string);
           const allowedHosts = [
             new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname,
             new URL(process.env.EVOLUTION_URL ?? 'https://evolution.vendly.chat').hostname,
           ];
-          if (!allowedHosts.includes(parsed.hostname)) {
+          if (!allowedHosts.includes(parsedUrl.hostname)) {
             res.status(403).json({ error: 'URL não permitida' }); return;
           }
         } catch { res.status(400).json({ error: 'URL inválida' }); return; }
@@ -187,7 +188,12 @@ async function main() {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 15_000);
         try {
-          const r = await fetch(url as string, { signal: ctrl.signal });
+          const fetchHeaders: Record<string, string> = {};
+          const chatwootHostname = new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname;
+          if (parsedUrl.hostname === chatwootHostname && process.env.CHATWOOT_API_KEY) {
+            fetchHeaders['api_access_token'] = process.env.CHATWOOT_API_KEY;
+          }
+          const r = await fetch(url as string, { signal: ctrl.signal, headers: fetchHeaders });
           if (!r.ok) { res.status(502).json({ error: `download ${r.status}` }); return; }
           const buf = Buffer.from(await r.arrayBuffer());
           audioBase64 = buf.toString('base64');
