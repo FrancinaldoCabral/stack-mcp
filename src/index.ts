@@ -124,7 +124,9 @@ async function main() {
         const r = await fetch(url, { signal: controller.signal });
         if (!r.ok) { res.status(502).json({ error: `upstream ${r.status}` }); return; }
         const buf = Buffer.from(await r.arrayBuffer());
-        const mimeType = r.headers.get('content-type')?.split(';')[0]?.trim() ?? 'audio/ogg';
+        let mimeType = r.headers.get('content-type')?.split(';')[0]?.trim() ?? 'audio/ogg';
+        // Normalize application/ogg → audio/ogg (Gemini requires audio/ prefix)
+        if (mimeType === 'application/ogg') mimeType = 'audio/ogg';
         res.json({ base64: buf.toString('base64'), size: buf.length, mimeType });
       } catch (err) {
         res.status(500).json({ error: String(err) });
