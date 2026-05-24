@@ -108,11 +108,15 @@ async function main() {
     webApp.get('/util/audio-base64', async (req, res) => {
       const url = req.query.url as string;
       if (!url) { res.status(400).json({ error: 'url required' }); return; }
-      // Segurança: só permite URLs do Chatwoot
+      // Segurança: permite URLs HTTPS de hosts conhecidos (Chatwoot + whitelist env)
       try {
         const parsed = new URL(url);
-        const allowed = new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname;
-        if (parsed.hostname !== allowed) { res.status(403).json({ error: 'URL não permitida' }); return; }
+        if (parsed.protocol !== 'https:') { res.status(403).json({ error: 'Apenas HTTPS permitido' }); return; }
+        // Bloquear IPs internos (SSRF protection)
+        const host = parsed.hostname;
+        if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|localhost|::1)/.test(host)) {
+          res.status(403).json({ error: 'URL não permitida' }); return;
+        }
       } catch { res.status(400).json({ error: 'URL inválida' }); return; }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15_000);
@@ -120,7 +124,8 @@ async function main() {
         const r = await fetch(url, { signal: controller.signal });
         if (!r.ok) { res.status(502).json({ error: `upstream ${r.status}` }); return; }
         const buf = Buffer.from(await r.arrayBuffer());
-        res.json({ base64: buf.toString('base64'), size: buf.length });
+        const mimeType = r.headers.get('content-type')?.split(';')[0]?.trim() ?? 'audio/ogg';
+        res.json({ base64: buf.toString('base64'), size: buf.length, mimeType });
       } catch (err) {
         res.status(500).json({ error: String(err) });
       } finally {

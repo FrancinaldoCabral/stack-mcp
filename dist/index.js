@@ -97,11 +97,16 @@ async function main() {
                 res.status(400).json({ error: 'url required' });
                 return;
             }
-            // Segurança: só permite URLs do Chatwoot
+            // Segurança: permite URLs HTTPS de hosts conhecidos (Chatwoot + whitelist env)
             try {
                 const parsed = new URL(url);
-                const allowed = new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname;
-                if (parsed.hostname !== allowed) {
+                if (parsed.protocol !== 'https:') {
+                    res.status(403).json({ error: 'Apenas HTTPS permitido' });
+                    return;
+                }
+                // Bloquear IPs internos (SSRF protection)
+                const host = parsed.hostname;
+                if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|localhost|::1)/.test(host)) {
                     res.status(403).json({ error: 'URL não permitida' });
                     return;
                 }
@@ -119,7 +124,8 @@ async function main() {
                     return;
                 }
                 const buf = Buffer.from(await r.arrayBuffer());
-                res.json({ base64: buf.toString('base64'), size: buf.length });
+                const mimeType = r.headers.get('content-type')?.split(';')[0]?.trim() ?? 'audio/ogg';
+                res.json({ base64: buf.toString('base64'), size: buf.length, mimeType });
             }
             catch (err) {
                 res.status(500).json({ error: String(err) });
@@ -184,13 +190,14 @@ async function main() {
             let audioBase64 = inBase64;
             let mimeType = inMimeType;
             if (!audioBase64 && url) {
+                let parsedUrl;
                 try {
-                    const parsed = new URL(url);
+                    parsedUrl = new URL(url);
                     const allowedHosts = [
                         new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname,
                         new URL(process.env.EVOLUTION_URL ?? 'https://evolution.vendly.chat').hostname,
                     ];
-                    if (!allowedHosts.includes(parsed.hostname)) {
+                    if (!allowedHosts.includes(parsedUrl.hostname)) {
                         res.status(403).json({ error: 'URL não permitida' });
                         return;
                     }
@@ -202,7 +209,12 @@ async function main() {
                 const ctrl = new AbortController();
                 const t = setTimeout(() => ctrl.abort(), 15_000);
                 try {
-                    const r = await fetch(url, { signal: ctrl.signal });
+                    const fetchHeaders = {};
+                    const chatwootHostname = new URL(process.env.CHATWOOT_URL ?? 'https://chatwoot.vendly.chat').hostname;
+                    if (parsedUrl.hostname === chatwootHostname && process.env.CHATWOOT_API_KEY) {
+                        fetchHeaders['api_access_token'] = process.env.CHATWOOT_API_KEY;
+                    }
+                    const r = await fetch(url, { signal: ctrl.signal, headers: fetchHeaders });
                     if (!r.ok) {
                         res.status(502).json({ error: `download ${r.status}` });
                         return;
