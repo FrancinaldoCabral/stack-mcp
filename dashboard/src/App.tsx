@@ -2,11 +2,8 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Businesses from './pages/Businesses';
-import Customers from './pages/Customers';
-import Conversations from './pages/Conversations';
-import Analytics from './pages/Analytics';
-import KnowledgeBase from './pages/KnowledgeBase';
 import Delivery from './pages/Delivery';
+import Maintenance from './pages/Maintenance';
 
 export default function App() {
   return (
@@ -15,11 +12,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/businesses" element={<Businesses />} />
-          <Route path="/customers" element={<Customers />} />
-          <Route path="/conversations" element={<Conversations />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/knowledge" element={<KnowledgeBase />} />
           <Route path="/delivery" element={<Delivery />} />
+          <Route path="/maintenance" element={<Maintenance />} />
         </Routes>
       </Layout>
     </BrowserRouter>

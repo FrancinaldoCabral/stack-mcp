@@ -3,11 +3,7 @@ import { Layout as AntLayout, Menu, Button, Input, Modal, Typography } from 'ant
 import {
   DashboardOutlined,
   ShopOutlined,
-  UserOutlined,
-  MessageOutlined,
-  BarChartOutlined,
-  RobotOutlined,
-  BookOutlined,
+  ToolOutlined,
   KeyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -20,13 +16,10 @@ const { Header, Sider, Content } = AntLayout;
 const { Text } = Typography;
 
 const menuItems = [
-  { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
+  { key: '/', icon: <DashboardOutlined />, label: 'Visão Geral' },
   { key: '/businesses', icon: <ShopOutlined />, label: 'Negócios' },
-  { key: '/customers', icon: <UserOutlined />, label: 'Clientes' },
-  { key: '/conversations', icon: <MessageOutlined />, label: 'Conversas' },
-  { key: '/analytics', icon: <BarChartOutlined />, label: 'Analytics' },
-  { key: '/knowledge', icon: <BookOutlined />, label: 'Base de Conhecimento' },
   { key: '/delivery', icon: <CarOutlined />, label: 'Delivery' },
+  { key: '/maintenance', icon: <ToolOutlined />, label: 'Manutenção' },
 ];
 
 interface Props { children: React.ReactNode }

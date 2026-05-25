@@ -118,6 +118,14 @@ export const api = {
   },
   updateDeliverySettlement: (id: string, data: { status: string }) =>
     req<import('./types').DeliverySettlement>(`/delivery/settlements/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  // Manutenção — limpeza de conversas
+  clearContactConversations: (phone: string, instance?: string) => {
+    const q = instance ? `?instance=${encodeURIComponent(instance)}` : '';
+    return req<{ ok: boolean; phone: string; detail: string }>(`/conversations/contact/${encodeURIComponent(phone)}${q}`, { method: 'DELETE' });
+  },
+  clearAllConversations: () =>
+    req<{ ok: boolean; detail: string }>('/conversations/all', { method: 'DELETE' }),
 };
 
 export { API_KEY };
