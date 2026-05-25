@@ -20,6 +20,7 @@ import { redisTools, handleRedisTool, closeRedis } from './tools/redis.js';
 import { qdrantTools, handleQdrantTool } from './tools/qdrant.js';
 import { coolifyTools, handleCoolifyTool } from './tools/coolify.js';
 import { intelligenceTools, handleIntelligenceTool } from './tools/intelligence.js';
+import { systemTools, handleSystemTool } from './tools/system.js';
 import { apiRouter } from './web/router.js';
 import { connectRouter } from './web/routes/connect.js';
 
@@ -33,6 +34,7 @@ const ALL_TOOLS = [
   ...qdrantTools,
   ...coolifyTools,
   ...intelligenceTools,
+  ...systemTools,
 ];
 
 // ── Router central ─────────────────────────────────────────────────────────
@@ -48,6 +50,7 @@ async function routeTool(
   if (name.startsWith('qdrant_'))     return handleQdrantTool(name, args);
   if (name.startsWith('coolify_'))    return handleCoolifyTool(name, args);
   if (name.startsWith('intelligence_') || name.startsWith('customer_') || name.startsWith('business_')) return handleIntelligenceTool(name, args);
+  if (name.startsWith('system_')) return handleSystemTool(name, args);
   return `❌ Ferramenta não encontrada: ${name}`;
 }
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { ObjectId } from 'mongodb';
 import { getDb } from '../../tools/mongodb.js';
+import { handleSystemTool } from '../../tools/system.js';
 
 export const conversationsRouter = Router();
 
@@ -35,5 +36,23 @@ conversationsRouter.get('/:id', async (req, res) => {
     const doc = await db.collection('conversations').findOne({ _id: new ObjectId(req.params.id) });
     if (!doc) return res.status(404).json({ error: 'Not found' });
     res.json(doc);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// DELETE /api/conversations/all  — apaga TUDO (Chatwoot + Redis + MongoDB)
+conversationsRouter.delete('/all', async (_req, res) => {
+  try {
+    const result = await handleSystemTool('system_clear_all_conversations', {});
+    res.json({ ok: true, detail: result });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// DELETE /api/conversations/contact/:phone  — apaga tudo de um contato
+conversationsRouter.delete('/contact/:phone', async (req, res) => {
+  try {
+    const phone = req.params.phone.replace(/\D/g, '');
+    if (!phone) return res.status(400).json({ error: 'Phone inválido' });
+    const result = await handleSystemTool('system_clear_contact', { phone, instance: req.query.instance });
+    res.json({ ok: true, phone, detail: result });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
