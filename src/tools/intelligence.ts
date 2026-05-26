@@ -201,6 +201,41 @@ export const intelligenceTools: Tool[] = [
       },
     },
   },
+  {
+    name: 'business_notify_list_get',
+    description: 'Retorna a lista de números de WhatsApp que recebem notificação quando o bot escala para atendimento humano.',
+    inputSchema: {
+      type: 'object',
+      required: ['instance'],
+      properties: {
+        instance: { type: 'string', description: 'Nome da instância Evolution API' },
+      },
+    },
+  },
+  {
+    name: 'business_notify_list_add',
+    description: 'Adiciona um número de WhatsApp à lista de notificação de escalada humana. Formato: 5521999999999 (apenas dígitos, com DDI).',
+    inputSchema: {
+      type: 'object',
+      required: ['instance', 'phone'],
+      properties: {
+        instance: { type: 'string', description: 'Nome da instância Evolution API' },
+        phone: { type: 'string', description: 'Número no formato 5521999999999 (DDI + DDD + número, apenas dígitos)' },
+      },
+    },
+  },
+  {
+    name: 'business_notify_list_remove',
+    description: 'Remove um número de WhatsApp da lista de notificação de escalada humana.',
+    inputSchema: {
+      type: 'object',
+      required: ['instance', 'phone'],
+      properties: {
+        instance: { type: 'string', description: 'Nome da instância Evolution API' },
+        phone: { type: 'string', description: 'Número no formato 5521999999999 (DDI + DDD + número, apenas dígitos)' },
+      },
+    },
+  },
 ];
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -372,6 +407,51 @@ export async function handleIntelligenceTool(name: string, args: Args): Promise<
         .sort({ name: 1 })
         .toArray();
       return JSON.stringify(docs, null, 2);
+    }
+
+    case 'business_notify_list_get': {
+      const db = await getMongo();
+      const doc = await db.collection('businesses').findOne(
+        { instances: args.instance },
+        { projection: { name: 1, escalationNotifyList: 1 } },
+      );
+      if (!doc) return JSON.stringify({ error: 'Negócio não encontrado para a instância: ' + args.instance });
+      return JSON.stringify({
+        business: doc.name,
+        escalationNotifyList: doc.escalationNotifyList ?? [],
+      }, null, 2);
+    }
+
+    case 'business_notify_list_add': {
+      const phone = String(args.phone).replace(/\D/g, '');
+      if (!phone) return '❌ Número inválido';
+      const db = await getMongo();
+      const res = await db.collection('businesses').updateOne(
+        { instances: args.instance },
+        { $addToSet: { escalationNotifyList: phone } as Record<string, unknown>, $set: { updated_at: new Date() } },
+      );
+      if (res.matchedCount === 0) return JSON.stringify({ error: 'Negócio não encontrado para a instância: ' + args.instance });
+      const doc = await db.collection('businesses').findOne(
+        { instances: args.instance },
+        { projection: { name: 1, escalationNotifyList: 1 } },
+      );
+      return JSON.stringify({ ok: true, business: doc?.name, escalationNotifyList: doc?.escalationNotifyList ?? [] }, null, 2);
+    }
+
+    case 'business_notify_list_remove': {
+      const phone = String(args.phone).replace(/\D/g, '');
+      if (!phone) return '❌ Número inválido';
+      const db = await getMongo();
+      const res = await (db.collection('businesses') as any).updateOne(
+        { instances: args.instance },
+        { $pull: { escalationNotifyList: phone }, $set: { updated_at: new Date() } },
+      );
+      if (res.matchedCount === 0) return JSON.stringify({ error: 'Negócio não encontrado para a instância: ' + args.instance });
+      const doc = await db.collection('businesses').findOne(
+        { instances: args.instance },
+        { projection: { name: 1, escalationNotifyList: 1 } },
+      );
+      return JSON.stringify({ ok: true, business: doc?.name, escalationNotifyList: doc?.escalationNotifyList ?? [] }, null, 2);
     }
 
     default:
