@@ -80,6 +80,16 @@ export const api = {
     req<{ contactFilter: import('./types').ContactFilter }>(`/businesses/${id}/contact-filter`, { method: 'PUT', body: JSON.stringify(filter) }),
   getInstanceGroups: (id: string, instanceName: string) =>
     req<{ groups: import('./types').WhatsAppGroup[] }>(`/businesses/${id}/instances/${encodeURIComponent(instanceName)}/groups`),
+  getInstanceContacts: (id: string, instanceName: string) =>
+    req<{ contacts: import('./types').InstanceContact[] }>(`/businesses/${id}/instances/${encodeURIComponent(instanceName)}/contacts`),
+
+  // Personas & context routes
+  getPersonas: (id: string) =>
+    req<{ personas: import('./types').Persona[]; contextRoutes: import('./types').ContextRoute[] }>(`/businesses/${id}/personas`),
+  updatePersonas: (id: string, personas: import('./types').Persona[]) =>
+    req<{ personas: import('./types').Persona[] }>(`/businesses/${id}/personas`, { method: 'PUT', body: JSON.stringify({ personas }) }),
+  updateContextRoutes: (id: string, contextRoutes: import('./types').ContextRoute[]) =>
+    req<{ contextRoutes: import('./types').ContextRoute[] }>(`/businesses/${id}/context-routes`, { method: 'PUT', body: JSON.stringify({ contextRoutes }) }),
 
   // Customers
   getCustomers: (params?: Record<string, string>) => {
@@ -127,13 +137,19 @@ export const api = {
     const q = params ? '?' + new URLSearchParams(params).toString() : '';
     return req<{ data: import('./types').DeliveryOrder[]; total: number }>(`/delivery/orders${q}`);
   },
+  updateDeliveryOrder: (id: string, data: Partial<import('./types').DeliveryOrder>) =>
+    req<import('./types').DeliveryOrder>(`/delivery/orders/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
   getDeliverySettlements: (params?: Record<string, string>) => {
     const q = params ? '?' + new URLSearchParams(params).toString() : '';
     return req<{ data: import('./types').DeliverySettlement[]; total: number }>(`/delivery/settlements${q}`);
   },
-  updateDeliverySettlement: (id: string, data: { status: string }) =>
+  createDeliverySettlement: (data: Partial<import('./types').DeliverySettlement>) =>
+    req<import('./types').DeliverySettlement>('/delivery/settlements', { method: 'POST', body: JSON.stringify(data) }),
+  updateDeliverySettlement: (id: string, data: Partial<import('./types').DeliverySettlement>) =>
     req<import('./types').DeliverySettlement>(`/delivery/settlements/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteDeliverySettlement: (id: string) =>
+    req<{ ok: boolean }>(`/delivery/settlements/${id}`, { method: 'DELETE' }),
 
   // Manutenção — limpeza de conversas
   clearContactConversations: (phone: string, instance?: string) => {

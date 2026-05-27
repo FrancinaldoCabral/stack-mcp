@@ -23,8 +23,28 @@ export interface Business {
   instanceInboxes?: Record<string, number>; // instanceName → chatwootInboxId
   escalationNotifyList?: string[];            // números que recebem WA quando bot escala
   contactFilter?: ContactFilter;
+  personas?: Persona[];
+  contextRoutes?: ContextRoute[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Persona {
+  key: string;
+  label: string;
+  systemPrompt: string;
+  tools: string[];
+}
+
+export interface ContextRoute {
+  jid: string;
+  personaKey: string;
+  restaurantId?: string;
+}
+
+export interface InstanceContact {
+  id: string;   // JID (5511...@s.whatsapp.net)
+  name: string;
 }
 
 export interface ContactFilter {
@@ -83,6 +103,12 @@ export interface KnowledgePoint {
 export interface DeliveryRestaurant {
   _id: string;
   name: string;
+  businessId?: string | null;
+  /** JID novo (grupo ou contato individual). */
+  commandJid?: string;
+  /** Indica se commandJid é grupo. */
+  commandIsGroup?: boolean;
+  /** Legado — mantido em sincronia com commandJid. */
   commandGroupJid: string;
   delivererGroupJid: string;
   active: boolean;

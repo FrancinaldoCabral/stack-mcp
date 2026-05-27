@@ -878,3 +878,154 @@ businessesRouter.post('/:id/notify-list', async (req, res) => {
     res.json({ escalationNotifyList: (updated.escalationNotifyList as string[]) ?? [] });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
+
+// -- Personas e Context Routes (mapeamento JID ? persona) ---------------------
+// Modelo:
+//   business.personas: [{ key, label, systemPrompt, tools: string[] }]
+//   business.contextRoutes: [{ jid, personaKey, restaurantId?: string }]
+// Cache rápido em Redis: persona_routes:{instance} ? JSON {personas, routes}.
+// Lido pelo nó "Resolver Persona" do workflow [AGENT] Executor.
+
+export interface Persona {
+  key: string;
+  label: string;
+  systemPrompt: string;
+  tools: string[];
+}
+
+export interface ContextRoute {
+  jid: string;
+  personaKey: string;
+  restaurantId?: string;
+}
+
+function sanitizePersonas(arr: unknown): Persona[] {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Set<string>();
+  const out: Persona[] = [];
+  for (const p of arr) {
+    const item = p as Partial<Persona>;
+    const key = String(item.key ?? '').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      key,
+      label: String(item.label ?? key),
+      systemPrompt: String(item.systemPrompt ?? ''),
+      tools: Array.isArray(item.tools) ? item.tools.map(String) : [],
+    });
+  }
+  return out;
+}
+
+function sanitizeRoutes(arr: unknown): ContextRoute[] {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Set<string>();
+  const out: ContextRoute[] = [];
+  for (const r of arr) {
+    const item = r as Partial<ContextRoute>;
+    const jid = String(item.jid ?? '').trim();
+    const personaKey = String(item.personaKey ?? '').trim();
+    if (!jid || !personaKey || seen.has(jid)) continue;
+    seen.add(jid);
+    const route: ContextRoute = { jid, personaKey };
+    if (item.restaurantId) route.restaurantId = String(item.restaurantId);
+    out.push(route);
+  }
+  return out;
+}
+
+/** Reconstrói e grava `persona_routes:{instance}` para todas as instâncias do negócio. */
+export async function syncPersonaRoutesToRedis(businessId: string): Promise<void> {
+  try {
+    const db = await getDb();
+    const biz = await db.collection('businesses').findOne(
+      { _id: new ObjectId(businessId) },
+      { projection: { instances: 1, personas: 1, contextRoutes: 1 } },
+    );
+    if (!biz) return;
+    const instances = (biz.instances as string[]) ?? [];
+    const personas = sanitizePersonas(biz.personas);
+    const routes = sanitizeRoutes(biz.contextRoutes);
+    const payload = JSON.stringify({
+      personas: Object.fromEntries(personas.map(p => [p.key, p])),
+      routes,
+    });
+    const redis = getRedis();
+    for (const inst of instances) {
+      if (personas.length === 0 && routes.length === 0) {
+        await redis.del(`persona_routes:${inst}`);
+      } else {
+        await redis.set(`persona_routes:${inst}`, payload);
+      }
+    }
+  } catch (e) { console.warn('syncPersonaRoutesToRedis falhou', e); }
+}
+
+// GET /api/businesses/:id/personas
+businessesRouter.get('/:id/personas', async (req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('businesses').findOne(
+      { _id: new ObjectId(req.params.id) },
+      { projection: { personas: 1, contextRoutes: 1 } },
+    );
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    res.json({
+      personas: sanitizePersonas(doc.personas),
+      contextRoutes: sanitizeRoutes(doc.contextRoutes),
+    });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// PUT /api/businesses/:id/personas — body: { personas: [...] }
+businessesRouter.put('/:id/personas', async (req, res) => {
+  try {
+    const personas = sanitizePersonas((req.body as { personas?: unknown }).personas);
+    const db = await getDb();
+    const updated = await db.collection('businesses').findOneAndUpdate(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { personas, updatedAt: new Date() } },
+      { returnDocument: 'after', projection: { personas: 1, contextRoutes: 1, instances: 1 } },
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    await syncPersonaRoutesToRedis(req.params.id);
+    res.json({ personas });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// PUT /api/businesses/:id/context-routes — body: { contextRoutes: [...] }
+businessesRouter.put('/:id/context-routes', async (req, res) => {
+  try {
+    const contextRoutes = sanitizeRoutes((req.body as { contextRoutes?: unknown }).contextRoutes);
+    const db = await getDb();
+    const updated = await db.collection('businesses').findOneAndUpdate(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { contextRoutes, updatedAt: new Date() } },
+      { returnDocument: 'after', projection: { contextRoutes: 1, instances: 1 } },
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    await syncPersonaRoutesToRedis(req.params.id);
+    res.json({ contextRoutes });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// GET /api/businesses/:id/instances/:name/contacts — proxy Evolution para listar contatos
+businessesRouter.get('/:id/instances/:name/contacts', async (req, res) => {
+  try {
+    const r = await axios.post(
+      `${config.evolution.url}/chat/findContacts/${encodeURIComponent(req.params.name)}`,
+      {},
+      { headers: { apikey: config.evolution.apiKey }, timeout: 15_000, validateStatus: () => true },
+    );
+    if (r.status >= 400) return res.status(r.status).json({ error: r.data });
+    const arr = Array.isArray(r.data) ? r.data : [];
+    const contacts = arr
+      .filter((c: { id?: string }) => typeof c.id === 'string' && !c.id.endsWith('@g.us'))
+      .map((c: { id?: string; pushName?: string; profilePicUrl?: string }) => ({
+        id: c.id ?? '',
+        name: c.pushName ?? c.id ?? '',
+      }));
+    res.json({ contacts });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});

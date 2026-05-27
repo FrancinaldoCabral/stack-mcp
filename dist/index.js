@@ -16,6 +16,7 @@ import { qdrantTools, handleQdrantTool } from './tools/qdrant.js';
 import { coolifyTools, handleCoolifyTool } from './tools/coolify.js';
 import { intelligenceTools, handleIntelligenceTool } from './tools/intelligence.js';
 import { systemTools, handleSystemTool } from './tools/system.js';
+import { deliveryTools, handleDeliveryTool } from './tools/delivery.js';
 import { apiRouter } from './web/router.js';
 import { connectRouter } from './web/routes/connect.js';
 // ── Registro global de ferramentas ─────────────────────────────────────────
@@ -29,6 +30,7 @@ const ALL_TOOLS = [
     ...coolifyTools,
     ...intelligenceTools,
     ...systemTools,
+    ...deliveryTools,
 ];
 // ── Router central ─────────────────────────────────────────────────────────
 async function routeTool(name, args) {
@@ -50,6 +52,8 @@ async function routeTool(name, args) {
         return handleIntelligenceTool(name, args);
     if (name.startsWith('system_'))
         return handleSystemTool(name, args);
+    if (name.startsWith('delivery_'))
+        return handleDeliveryTool(name, args);
     return `❌ Ferramenta não encontrada: ${name}`;
 }
 // ── Factory: cria um Server MCP com todos os handlers ───────────────────────
