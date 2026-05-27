@@ -1,6 +1,6 @@
 {
   "name": "stack-mcp",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "MCP Server para gerenciar stack: n8n, Evolution API, Chatwoot, MongoDB, Redis, Qdrant, Coolify",
   "type": "module",
   "scripts": {
