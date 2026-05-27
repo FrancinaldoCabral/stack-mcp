@@ -72,12 +72,18 @@ const redisGetNode = {
 };
 
 const applyCode = `// Aplica filtro de contatos (blacklist/whitelist) salvo em Redis pelo dashboard.
-// Sem filtro = atende todo mundo (compatibilidade retroativa).
-const item = $input.first().json;
-const raw = item.filter_raw; // string JSON ou null/undefined
+// IMPORTANTE: Redis GET substitui o item por {filter_raw: ...}, perdendo os campos
+// originais — exatamente como Redis GET Dedup/human_takeover faz. Por isso resgatamos
+// o item original via $('Normalizar Mensagem').first().json (mesmo padrão do nó
+// "Restaurar Item Dedup" deste workflow).
+// Sem filtro configurado = atende todo mundo (compatibilidade retroativa).
+const item = $('Normalizar Mensagem').first().json;
+const filterRaw = $input.first().json?.filter_raw ?? null;
+
+if (!filterRaw) return [{ json: item }];
+
 let filter = null;
-try { filter = raw ? JSON.parse(raw) : null; } catch { filter = null; }
-delete item.filter_raw;
+try { filter = JSON.parse(String(filterRaw)); } catch { filter = null; }
 
 if (!filter) return [{ json: item }];
 
@@ -96,11 +102,11 @@ return [{ json: item }];
 `;
 
 const applyNode = {
-  parameters: { mode: 'runOnceForEachItem', jsCode: applyCode },
+  parameters: { jsCode: applyCode },
   id: 'aplicar-filtro-contatos',
   name: NODE_APPLY,
   type: 'n8n-nodes-base.code',
-  typeVersion: 2,
+  typeVersion: 1,
   position: [720, 200],
 };
 
