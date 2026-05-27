@@ -73,6 +73,14 @@ export const api = {
   removeNotifyContact: (id: string, phone: string) =>
     req<{ escalationNotifyList: string[] }>(`/businesses/${id}/notify-list`, { method: 'POST', body: JSON.stringify({ phone, action: 'remove' }) }),
 
+  // Contact filter
+  getContactFilter: (id: string) =>
+    req<{ contactFilter: import('./types').ContactFilter }>(`/businesses/${id}/contact-filter`),
+  updateContactFilter: (id: string, filter: import('./types').ContactFilter) =>
+    req<{ contactFilter: import('./types').ContactFilter }>(`/businesses/${id}/contact-filter`, { method: 'PUT', body: JSON.stringify(filter) }),
+  getInstanceGroups: (id: string, instanceName: string) =>
+    req<{ groups: import('./types').WhatsAppGroup[] }>(`/businesses/${id}/instances/${encodeURIComponent(instanceName)}/groups`),
+
   // Customers
   getCustomers: (params?: Record<string, string>) => {
     const q = params ? '?' + new URLSearchParams(params).toString() : '';

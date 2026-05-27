@@ -22,8 +22,21 @@ export interface Business {
   instanceAgents: Record<string, string>;   // instanceName → agent._id
   instanceInboxes?: Record<string, number>; // instanceName → chatwootInboxId
   escalationNotifyList?: string[];            // números que recebem WA quando bot escala
+  contactFilter?: ContactFilter;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ContactFilter {
+  mode: 'blacklist' | 'whitelist';
+  contacts: string[]; // dígitos
+  groups: string[];   // JIDs @g.us
+}
+
+export interface WhatsAppGroup {
+  id: string;       // JID @g.us
+  subject: string;  // nome
+  size: number;     // participantes
 }
 
 export interface Customer {

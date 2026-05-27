@@ -1,0 +1,973 @@
+﻿{
+    "updatedAt":  "2026-05-24T21:39:08.832Z",
+    "createdAt":  "2026-05-16T23:45:25.898Z",
+    "id":  "bEb19TdWZfFloisU",
+    "name":  "[CORE] Entrada de Mensagem",
+    "description":  null,
+    "active":  true,
+    "isArchived":  false,
+    "nodes":  [
+                  {
+                      "id":  "webhook-entrada",
+                      "name":  "Webhook Evolution",
+                      "type":  "n8n-nodes-base.webhook",
+                      "typeVersion":  2,
+                      "position":  [
+                                       240,
+                                       300
+                                   ],
+                      "webhookId":  "evolution",
+                      "parameters":  {
+                                         "path":  "chatwoot-bot",
+                                         "httpMethod":  "POST",
+                                         "responseMode":  "onReceived",
+                                         "options":  {
+
+                                                     }
+                                     }
+                  },
+                  {
+                      "id":  "normalizar",
+                      "name":  "Normalizar Mensagem",
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       480,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "mode":  "runOnceForAllItems",
+                                         "jsCode":  "// Chatwoot Agent Bot webhook payload\nconst raw = $input.first().json;\nconst data = raw.body ?? raw;\n\n// Filtrar apenas eventos de criação de mensagem (evita message_updated e retries)\nif (data.event \u0026\u0026 data.event !== \u0027message_created\u0027) return [];\n\n// Filtrar apenas mensagens de entrada (do contato/cliente)\nconst msgType = data.message_type;\nif (msgType !== \u0027incoming\u0027 \u0026\u0026 msgType !== 0) return [];\n\n\n// Conteúdo e tipo da mensagem\nconst contentType = data.content_type ?? \u0027text\u0027;\nconst content = data.content ?? \u0027\u0027;\nconst attachments = data.attachments ?? [];\n\nlet tipo = \u0027texto\u0027;\nlet conteudo = content;\nlet metadata = {};\n\nif (contentType === \u0027image\u0027 || attachments.some(a =\u003e a.file_type === \u0027image\u0027)) {\n  tipo = \u0027imagem\u0027;\n  const att = attachments.find(a =\u003e a.file_type === \u0027image\u0027);\n  if (att) { metadata = { url: att.data_url }; conteudo = content || \u0027imagem\u0027; }\n} else if (contentType === \u0027audio\u0027 || attachments.some(a =\u003e a.file_type === \u0027audio\u0027)) {\n  tipo = \u0027audio\u0027;\n  const att = attachments.find(a =\u003e a.file_type === \u0027audio\u0027);\n  if (att) { metadata = { url: att.data_url }; conteudo = \u0027[audio]\u0027; }\n} else if (contentType === \u0027file\u0027 || attachments.some(a =\u003e a.file_type === \u0027file\u0027)) {\n  tipo = \u0027documento\u0027;\n  const att = attachments.find(a =\u003e a.file_type === \u0027file\u0027);\n  if (att) { metadata = { fileName: att.file_name, url: att.data_url }; conteudo = att.file_name || \u0027[documento]\u0027; }\n}\n\nconst conversationId = String(data.conversation?.id ?? \u0027\u0027);\nconst accountId = String(data.account?.id ?? \u00271\u0027);\nconst inboxName = data.inbox?.name ?? \u0027\u0027;\nconst cwMessageId = String(data.id ?? \u0027\u0027);\n\n// Identificador do remetente\n// Para grupos: sender.phone_number é null → usar sender.identifier (JID do grupo)\n// Para individuais: sender.phone_number tem o número no formato +5511999...\nconst identifier = data.sender?.identifier ?? \u0027\u0027;   // e.g. \"120363410205219199@g.us\"\nconst isGroup = identifier.includes(\u0027@g.us\u0027);\n\nlet telefone = data.sender?.phone_number ?? \u0027\u0027;\ntelefone = telefone.replace(/\\D/g, \u0027\u0027);\n\n// Para grupos, usar o JID como identificador (para chaves Redis e remoteJid)\nconst remoteJid = isGroup ? identifier : (telefone ? telefone + \u0027@s.whatsapp.net\u0027 : identifier);\n// Chave Redis usa o identifier para grupos (JID sem @g.us seria ambíguo), ou telefone para individuais\nconst chaveId = isGroup ? identifier : telefone;\n\nconst pushName = data.sender?.name ?? chaveId;\n\nif (!conversationId || !inboxName) return [];\n\nreturn [{\n  json: {\n    conversation_id: conversationId,\n    conversation_status: data.conversation?.status ?? \u0027open\u0027,\n    account_id: accountId,\n    instance: inboxName,\n    telefone: chaveId,\n    pushName,\n    conteudo,\n    tipo,\n    metadata,\n    timestamp: data.created_at ?? Math.floor(Date.now() / 1000),\n    cw_message_id: cwMessageId,\n    remoteJid,\n    isGroup,\n  }\n}];"
+                                     }
+                  },
+                  {
+                      "id":  "set-debounce-ts",
+                      "name":  "Setar Timestamp Debounce",
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       1700,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "jsCode":  "const item = $input.first().json;\nreturn [{ json: { ...item, ts: String(Date.now()), firstMessageTs: item.timestamp ?? Math.floor(Date.now() / 1000) } }];"
+                                     }
+                  },
+                  {
+                      "id":  "redis-set-debounce-ts",
+                      "name":  "Redis SET Debounce TS",
+                      "type":  "n8n-nodes-base.redis",
+                      "typeVersion":  1,
+                      "position":  [
+                                       1940,
+                                       300
+                                   ],
+                      "credentials":  {
+                                          "redis":  {
+                                                        "id":  "zkKpThv7TlkK3IoB",
+                                                        "name":  "Redis Vendly"
+                                                    }
+                                      },
+                      "parameters":  {
+                                         "operation":  "set",
+                                         "key":  "={{ \u0027debounce_ts:cw:\u0027 + $json.conversation_id }}",
+                                         "value":  "={{ $json.ts }}",
+                                         "expire":  true,
+                                         "ttl":  10
+                                     }
+                  },
+                  {
+                      "id":  "call-debounce",
+                      "name":  "Chamar Debounce",
+                      "type":  "n8n-nodes-base.httpRequest",
+                      "typeVersion":  4.2,
+                      "position":  [
+                                       2180,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "method":  "POST",
+                                         "url":  "https://workflows.vendly.chat/webhook/debounce-trigger",
+                                         "sendBody":  true,
+                                         "specifyBody":  "json",
+                                         "jsonBody":  "={{ JSON.stringify({ conversation_id: $json.conversation_id, account_id: $json.account_id, instance: $json.instance, telefone: $json.telefone, pushName: $json.pushName, ts: $json.ts, cw_message_id: $json.cw_message_id }) }}",
+                                         "options":  {
+                                                         "response":  {
+                                                                          "response":  {
+                                                                                           "neverError":  true
+                                                                                       }
+                                                                      }
+                                                     }
+                                     }
+                  },
+                  {
+                      "id":  "push-buffer-in",
+                      "name":  "PUSH Buffer",
+                      "type":  "n8n-nodes-base.redis",
+                      "typeVersion":  1,
+                      "position":  [
+                                       1440,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "operation":  "push",
+                                         "list":  "={{ \u0027buffer:cw:\u0027 + $json.conversation_id }}",
+                                         "messageData":  "={{ JSON.stringify($json) }}"
+                                     },
+                      "credentials":  {
+                                          "redis":  {
+                                                        "id":  "zkKpThv7TlkK3IoB",
+                                                        "name":  "Redis Vendly"
+                                                    }
+                                      }
+                  },
+                  {
+                      "id":  "redis-get-dedup",
+                      "name":  "Redis GET Dedup",
+                      "type":  "n8n-nodes-base.redis",
+                      "typeVersion":  1,
+                      "position":  [
+                                       1140,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "operation":  "get",
+                                         "key":  "={{ \u0027cw_dedup:\u0027 + $json.conversation_id + \u0027:\u0027 + $json.timestamp }}",
+                                         "propertyName":  "dedup_seen",
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "credentials":  {
+                                          "redis":  {
+                                                        "id":  "zkKpThv7TlkK3IoB",
+                                                        "name":  "Redis Vendly"
+                                                    }
+                                      }
+                  },
+                  {
+                      "id":  "if-dedup",
+                      "name":  "IF Já Processado?",
+                      "type":  "n8n-nodes-base.if",
+                      "typeVersion":  2,
+                      "position":  [
+                                       1380,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "conditions":  {
+                                                            "options":  {
+                                                                            "caseSensitive":  false,
+                                                                            "typeValidation":  "loose"
+                                                                        },
+                                                            "conditions":  [
+                                                                               {
+                                                                                   "id":  "dedup-check",
+                                                                                   "leftValue":  "={{ $json.dedup_seen ?? \u0027\u0027 }}",
+                                                                                   "rightValue":  "",
+                                                                                   "operator":  {
+                                                                                                    "type":  "string",
+                                                                                                    "operation":  "notEmpty"
+                                                                                                }
+                                                                               }
+                                                                           ],
+                                                            "combinator":  "and"
+                                                        }
+                                     }
+                  },
+                  {
+                      "id":  "redis-set-dedup",
+                      "name":  "Redis SET Dedup",
+                      "type":  "n8n-nodes-base.redis",
+                      "typeVersion":  1,
+                      "position":  [
+                                       1620,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "operation":  "set",
+                                         "key":  "={{ \u0027cw_dedup:\u0027 + $json.conversation_id + \u0027:\u0027 + $json.timestamp }}",
+                                         "value":  "1",
+                                         "expire":  true,
+                                         "ttl":  120,
+                                         "keyType":  "string"
+                                     },
+                      "credentials":  {
+                                          "redis":  {
+                                                        "id":  "zkKpThv7TlkK3IoB",
+                                                        "name":  "Redis Vendly"
+                                                    }
+                                      }
+                  },
+                  {
+                      "id":  "restaurar-item-dedup",
+                      "name":  "Restaurar Item Dedup",
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       1620,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "jsCode":  "// Redis GET Dedup substitui o item por {dedup_seen: value}, perdendo os campos originais.\n// Restauramos o item original do Normalizar Mensagem antes de prosseguir.\nconst original = $(\u0027Normalizar Mensagem\u0027).first().json;\nreturn [{ json: original }];"
+                                     }
+                  },
+                  {
+                      "id":  "auto-accept-conv-1779655662184",
+                      "name":  "Auto-Aceitar Conversa",
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       920,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "jsCode":  "// Verificar se há takeover humano ativo e auto-aceitar conversa pendente\nconst msg = $input.first().json;\n\n// Se Redis tem chave human_takeover → humano controla → bot silencia\nconst takeover = msg.takeover_value ?? null;\nif (takeover !== null \u0026\u0026 takeover !== \u0027\u0027) {\n  return [];\n}\n\n// Auto-aceitar conversa pendente (sem isso, Agent Bot não consegue operar)\nif (msg.conversation_id \u0026\u0026 msg.conversation_status === \u0027pending\u0027) {\n  try {\n    await fetch(\n      \u0027https://chatwoot.vendly.chat/api/v1/accounts/1/conversations/\u0027 + msg.conversation_id + \u0027/toggle_status\u0027,\n      {\n        method: \u0027POST\u0027,\n        headers: { \u0027Content-Type\u0027: \u0027application/json\u0027, \u0027api_access_token\u0027: \u0027Db9GHGsN9YVUDhJvD5CHbVTz\u0027 },\n        body: JSON.stringify({ status: \u0027open\u0027 }),\n      }\n    );\n  } catch (e) {}\n}\n\nreturn [$input.first()];"
+                                     }
+                  },
+                  {
+                      "id":  "redis-get-takeover",
+                      "name":  "Redis GET human_takeover",
+                      "type":  "n8n-nodes-base.redis",
+                      "typeVersion":  1,
+                      "position":  [
+                                       700,
+                                       300
+                                   ],
+                      "parameters":  {
+                                         "operation":  "get",
+                                         "key":  "={{ \u0027human_takeover:\u0027 + $json.instance + \u0027:\u0027 + $json.telefone }}",
+                                         "propertyName":  "takeover_value",
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "credentials":  {
+                                          "redis":  {
+                                                        "id":  "zkKpThv7TlkK3IoB",
+                                                        "name":  "Redis Vendly"
+                                                    }
+                                      }
+                  }
+              ],
+    "connections":  {
+                        "Webhook Evolution":  {
+                                                  "main":  [
+                                                               [
+                                                                   {
+                                                                       "node":  "Normalizar Mensagem",
+                                                                       "type":  "main",
+                                                                       "index":  0
+                                                                   }
+                                                               ]
+                                                           ]
+                                              },
+                        "Normalizar Mensagem":  {
+                                                    "main":  [
+                                                                 [
+                                                                     {
+                                                                         "node":  "Redis GET human_takeover",
+                                                                         "type":  "main",
+                                                                         "index":  0
+                                                                     }
+                                                                 ]
+                                                             ]
+                                                },
+                        "PUSH Buffer":  {
+                                            "main":  [
+                                                         [
+                                                             {
+                                                                 "node":  "Setar Timestamp Debounce",
+                                                                 "type":  "main",
+                                                                 "index":  0
+                                                             }
+                                                         ]
+                                                     ]
+                                        },
+                        "Setar Timestamp Debounce":  {
+                                                         "main":  [
+                                                                      [
+                                                                          {
+                                                                              "node":  "Redis SET Debounce TS",
+                                                                              "type":  "main",
+                                                                              "index":  0
+                                                                          }
+                                                                      ]
+                                                                  ]
+                                                     },
+                        "Redis SET Debounce TS":  {
+                                                      "main":  [
+                                                                   [
+                                                                       {
+                                                                           "node":  "Chamar Debounce",
+                                                                           "type":  "main",
+                                                                           "index":  0
+                                                                       }
+                                                                   ]
+                                                               ]
+                                                  },
+                        "Redis GET Dedup":  {
+                                                "main":  [
+                                                             [
+                                                                 {
+                                                                     "node":  "IF Já Processado?",
+                                                                     "type":  "main",
+                                                                     "index":  0
+                                                                 }
+                                                             ]
+                                                         ]
+                                            },
+                        "IF Já Processado?":  {
+                                                  "main":  [
+                                                               [
+
+                                                               ],
+                                                               [
+                                                                   {
+                                                                       "node":  "Restaurar Item Dedup",
+                                                                       "type":  "main",
+                                                                       "index":  0
+                                                                   }
+                                                               ]
+                                                           ]
+                                              },
+                        "Redis SET Dedup":  {
+                                                "main":  [
+                                                             [
+                                                                 {
+                                                                     "node":  "PUSH Buffer",
+                                                                     "type":  "main",
+                                                                     "index":  0
+                                                                 }
+                                                             ]
+                                                         ]
+                                            },
+                        "Restaurar Item Dedup":  {
+                                                     "main":  [
+                                                                  [
+                                                                      {
+                                                                          "node":  "Redis SET Dedup",
+                                                                          "type":  "main",
+                                                                          "index":  0
+                                                                      }
+                                                                  ]
+                                                              ]
+                                                 },
+                        "Auto-Aceitar Conversa":  {
+                                                      "main":  [
+                                                                   [
+                                                                       {
+                                                                           "node":  "Redis GET Dedup",
+                                                                           "type":  "main",
+                                                                           "index":  0
+                                                                       }
+                                                                   ]
+                                                               ]
+                                                  },
+                        "Redis GET human_takeover":  {
+                                                         "main":  [
+                                                                      [
+                                                                          {
+                                                                              "node":  "Auto-Aceitar Conversa",
+                                                                              "type":  "main",
+                                                                              "index":  0
+                                                                          }
+                                                                      ]
+                                                                  ]
+                                                     }
+                    },
+    "settings":  {
+                     "executionOrder":  "v1",
+                     "saveManualExecutions":  true,
+                     "callerPolicy":  "workflowsFromSameOwner",
+                     "binaryMode":  "separate"
+                 },
+    "staticData":  null,
+    "meta":  null,
+    "pinData":  {
+                    "Webhook Evolution":  [
+                                              {
+                                                  "json":  {
+                                                               "headers":  {
+                                                                               "host":  "workflows.vendly.chat",
+                                                                               "user-agent":  "axios/1.13.2",
+                                                                               "content-length":  "1702",
+                                                                               "accept":  "application/json, text/plain, */*",
+                                                                               "accept-encoding":  "gzip, compress, deflate, br",
+                                                                               "content-type":  "application/json",
+                                                                               "x-forwarded-for":  "172.22.0.1",
+                                                                               "x-forwarded-host":  "workflows.vendly.chat",
+                                                                               "x-forwarded-port":  "443",
+                                                                               "x-forwarded-proto":  "https",
+                                                                               "x-forwarded-server":  "d3a618a4a061",
+                                                                               "x-real-ip":  "172.22.0.1"
+                                                                           },
+                                                               "params":  {
+
+                                                                          },
+                                                               "query":  {
+
+                                                                         },
+                                                               "body":  {
+                                                                            "event":  "messages.upsert",
+                                                                            "instance":  "redatudo",
+                                                                            "data":  {
+                                                                                         "key":  {
+                                                                                                     "remoteJid":  "5521969435536@s.whatsapp.net",
+                                                                                                     "remoteJidAlt":  "5521969435536@s.whatsapp.net",
+                                                                                                     "fromMe":  false,
+                                                                                                     "id":  "A5A90E5B3ECC6D976CB574E17B6B0753",
+                                                                                                     "participant":  "",
+                                                                                                     "addressingMode":  "lid"
+                                                                                                 },
+                                                                                         "pushName":  "naldocabral",
+                                                                                         "status":  "DELIVERY_ACK",
+                                                                                         "message":  {
+                                                                                                         "messageContextInfo":  {
+                                                                                                                                    "threadId":  [
+
+                                                                                                                                                 ],
+                                                                                                                                    "deviceListMetadata":  {
+                                                                                                                                                               "senderKeyIndexes":  [
+
+                                                                                                                                                                                    ],
+                                                                                                                                                               "recipientKeyIndexes":  [
+
+                                                                                                                                                                                       ],
+                                                                                                                                                               "senderKeyHash":  {
+                                                                                                                                                                                     "0":  93,
+                                                                                                                                                                                     "1":  241,
+                                                                                                                                                                                     "2":  236,
+                                                                                                                                                                                     "3":  213,
+                                                                                                                                                                                     "4":  18,
+                                                                                                                                                                                     "5":  68,
+                                                                                                                                                                                     "6":  211,
+                                                                                                                                                                                     "7":  106,
+                                                                                                                                                                                     "8":  207,
+                                                                                                                                                                                     "9":  99
+                                                                                                                                                                                 },
+                                                                                                                                                               "senderTimestamp":  {
+                                                                                                                                                                                       "low":  1778596570,
+                                                                                                                                                                                       "high":  0,
+                                                                                                                                                                                       "unsigned":  true
+                                                                                                                                                                                   },
+                                                                                                                                                               "recipientKeyHash":  {
+                                                                                                                                                                                        "0":  105,
+                                                                                                                                                                                        "1":  158,
+                                                                                                                                                                                        "2":  146,
+                                                                                                                                                                                        "3":  193,
+                                                                                                                                                                                        "4":  164,
+                                                                                                                                                                                        "5":  82,
+                                                                                                                                                                                        "6":  134,
+                                                                                                                                                                                        "7":  245,
+                                                                                                                                                                                        "8":  141,
+                                                                                                                                                                                        "9":  242
+                                                                                                                                                                                    },
+                                                                                                                                                               "recipientTimestamp":  {
+                                                                                                                                                                                          "low":  1778865147,
+                                                                                                                                                                                          "high":  0,
+                                                                                                                                                                                          "unsigned":  true
+                                                                                                                                                                                      }
+                                                                                                                                                           },
+                                                                                                                                    "deviceListMetadataVersion":  2,
+                                                                                                                                    "messageSecret":  {
+                                                                                                                                                          "0":  136,
+                                                                                                                                                          "1":  53,
+                                                                                                                                                          "2":  67,
+                                                                                                                                                          "3":  2,
+                                                                                                                                                          "4":  250,
+                                                                                                                                                          "5":  116,
+                                                                                                                                                          "6":  54,
+                                                                                                                                                          "7":  229,
+                                                                                                                                                          "8":  118,
+                                                                                                                                                          "9":  253,
+                                                                                                                                                          "10":  190,
+                                                                                                                                                          "11":  220,
+                                                                                                                                                          "12":  237,
+                                                                                                                                                          "13":  164,
+                                                                                                                                                          "14":  157,
+                                                                                                                                                          "15":  22,
+                                                                                                                                                          "16":  167,
+                                                                                                                                                          "17":  241,
+                                                                                                                                                          "18":  92,
+                                                                                                                                                          "19":  93,
+                                                                                                                                                          "20":  208,
+                                                                                                                                                          "21":  0,
+                                                                                                                                                          "22":  148,
+                                                                                                                                                          "23":  156,
+                                                                                                                                                          "24":  109,
+                                                                                                                                                          "25":  9,
+                                                                                                                                                          "26":  100,
+                                                                                                                                                          "27":  75,
+                                                                                                                                                          "28":  222,
+                                                                                                                                                          "29":  252,
+                                                                                                                                                          "30":  170,
+                                                                                                                                                          "31":  85
+                                                                                                                                                      }
+                                                                                                                                },
+                                                                                                         "conversation":  "oi"
+                                                                                                     },
+                                                                                         "contextInfo":  {
+                                                                                                             "mentionedJid":  [
+
+                                                                                                                              ],
+                                                                                                             "groupMentions":  [
+
+                                                                                                                               ],
+                                                                                                             "statusAttributions":  [
+
+                                                                                                                                    ],
+                                                                                                             "expiration":  86400,
+                                                                                                             "ephemeralSettingTimestamp":  {
+                                                                                                                                               "low":  1748223763,
+                                                                                                                                               "high":  0,
+                                                                                                                                               "unsigned":  false
+                                                                                                                                           },
+                                                                                                             "disappearingMode":  {
+                                                                                                                                      "initiator":  0,
+                                                                                                                                      "trigger":  1,
+                                                                                                                                      "initiatedByMe":  true
+                                                                                                                                  }
+                                                                                                         },
+                                                                                         "messageType":  "conversation",
+                                                                                         "messageTimestamp":  1779011974,
+                                                                                         "instanceId":  "7bc4bec9-e267-4a28-8235-8d4867d5f8cf",
+                                                                                         "source":  "android"
+                                                                                     },
+                                                                            "destination":  "https://workflows.vendly.chat/webhook/evolution",
+                                                                            "date_time":  "2026-05-17T06:59:34.894Z",
+                                                                            "sender":  "556584011436@s.whatsapp.net",
+                                                                            "server_url":  "http://evo-p8gg4sgwcgkkwgcg0kogsgg0.157.173.111.65.sslip.io",
+                                                                            "apikey":  "6FE60C51D1B8-4A97-B243-23AED407E4A1"
+                                                                        },
+                                                               "webhookUrl":  "https://workflows.vendly.chat/webhook/evolution",
+                                                               "executionMode":  "production"
+                                                           }
+                                              }
+                                          ]
+                },
+    "versionId":  "c7703adb-53ff-42ce-95cb-740b4633963c",
+    "activeVersionId":  "c7703adb-53ff-42ce-95cb-740b4633963c",
+    "versionCounter":  88,
+    "triggerCount":  1,
+    "shared":  [
+                   {
+                       "updatedAt":  "2026-05-16T23:45:25.908Z",
+                       "createdAt":  "2026-05-16T23:45:25.908Z",
+                       "role":  "workflow:owner",
+                       "workflowId":  "bEb19TdWZfFloisU",
+                       "projectId":  "94NIksxMKQsF14ap",
+                       "project":  {
+                                       "updatedAt":  "2026-05-16T17:06:47.620Z",
+                                       "createdAt":  "2026-05-15T08:00:28.661Z",
+                                       "id":  "94NIksxMKQsF14ap",
+                                       "name":  "Naldo Cabral \u003csuporte@vendly.chat\u003e",
+                                       "type":  "personal",
+                                       "icon":  null,
+                                       "description":  null,
+                                       "creatorId":  "c95f53fe-34f2-46ef-86bf-dd1eaa6142d6"
+                                   }
+                   }
+               ],
+    "tags":  [
+
+             ],
+    "activeVersion":  {
+                          "updatedAt":  "2026-05-24T21:39:08.837Z",
+                          "createdAt":  "2026-05-24T21:39:08.837Z",
+                          "versionId":  "c7703adb-53ff-42ce-95cb-740b4633963c",
+                          "workflowId":  "bEb19TdWZfFloisU",
+                          "nodes":  [
+                                        {
+                                            "id":  "webhook-entrada",
+                                            "name":  "Webhook Evolution",
+                                            "type":  "n8n-nodes-base.webhook",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             240,
+                                                             300
+                                                         ],
+                                            "webhookId":  "evolution",
+                                            "parameters":  {
+                                                               "path":  "chatwoot-bot",
+                                                               "httpMethod":  "POST",
+                                                               "responseMode":  "onReceived",
+                                                               "options":  {
+
+                                                                           }
+                                                           }
+                                        },
+                                        {
+                                            "id":  "normalizar",
+                                            "name":  "Normalizar Mensagem",
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             480,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "mode":  "runOnceForAllItems",
+                                                               "jsCode":  "// Chatwoot Agent Bot webhook payload\nconst raw = $input.first().json;\nconst data = raw.body ?? raw;\n\n// Filtrar apenas eventos de criação de mensagem (evita message_updated e retries)\nif (data.event \u0026\u0026 data.event !== \u0027message_created\u0027) return [];\n\n// Filtrar apenas mensagens de entrada (do contato/cliente)\nconst msgType = data.message_type;\nif (msgType !== \u0027incoming\u0027 \u0026\u0026 msgType !== 0) return [];\n\n\n// Conteúdo e tipo da mensagem\nconst contentType = data.content_type ?? \u0027text\u0027;\nconst content = data.content ?? \u0027\u0027;\nconst attachments = data.attachments ?? [];\n\nlet tipo = \u0027texto\u0027;\nlet conteudo = content;\nlet metadata = {};\n\nif (contentType === \u0027image\u0027 || attachments.some(a =\u003e a.file_type === \u0027image\u0027)) {\n  tipo = \u0027imagem\u0027;\n  const att = attachments.find(a =\u003e a.file_type === \u0027image\u0027);\n  if (att) { metadata = { url: att.data_url }; conteudo = content || \u0027imagem\u0027; }\n} else if (contentType === \u0027audio\u0027 || attachments.some(a =\u003e a.file_type === \u0027audio\u0027)) {\n  tipo = \u0027audio\u0027;\n  const att = attachments.find(a =\u003e a.file_type === \u0027audio\u0027);\n  if (att) { metadata = { url: att.data_url }; conteudo = \u0027[audio]\u0027; }\n} else if (contentType === \u0027file\u0027 || attachments.some(a =\u003e a.file_type === \u0027file\u0027)) {\n  tipo = \u0027documento\u0027;\n  const att = attachments.find(a =\u003e a.file_type === \u0027file\u0027);\n  if (att) { metadata = { fileName: att.file_name, url: att.data_url }; conteudo = att.file_name || \u0027[documento]\u0027; }\n}\n\nconst conversationId = String(data.conversation?.id ?? \u0027\u0027);\nconst accountId = String(data.account?.id ?? \u00271\u0027);\nconst inboxName = data.inbox?.name ?? \u0027\u0027;\nconst cwMessageId = String(data.id ?? \u0027\u0027);\n\n// Identificador do remetente\n// Para grupos: sender.phone_number é null → usar sender.identifier (JID do grupo)\n// Para individuais: sender.phone_number tem o número no formato +5511999...\nconst identifier = data.sender?.identifier ?? \u0027\u0027;   // e.g. \"120363410205219199@g.us\"\nconst isGroup = identifier.includes(\u0027@g.us\u0027);\n\nlet telefone = data.sender?.phone_number ?? \u0027\u0027;\ntelefone = telefone.replace(/\\D/g, \u0027\u0027);\n\n// Para grupos, usar o JID como identificador (para chaves Redis e remoteJid)\nconst remoteJid = isGroup ? identifier : (telefone ? telefone + \u0027@s.whatsapp.net\u0027 : identifier);\n// Chave Redis usa o identifier para grupos (JID sem @g.us seria ambíguo), ou telefone para individuais\nconst chaveId = isGroup ? identifier : telefone;\n\nconst pushName = data.sender?.name ?? chaveId;\n\nif (!conversationId || !inboxName) return [];\n\nreturn [{\n  json: {\n    conversation_id: conversationId,\n    conversation_status: data.conversation?.status ?? \u0027open\u0027,\n    account_id: accountId,\n    instance: inboxName,\n    telefone: chaveId,\n    pushName,\n    conteudo,\n    tipo,\n    metadata,\n    timestamp: data.created_at ?? Math.floor(Date.now() / 1000),\n    cw_message_id: cwMessageId,\n    remoteJid,\n    isGroup,\n  }\n}];"
+                                                           }
+                                        },
+                                        {
+                                            "id":  "set-debounce-ts",
+                                            "name":  "Setar Timestamp Debounce",
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             1700,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "jsCode":  "const item = $input.first().json;\nreturn [{ json: { ...item, ts: String(Date.now()), firstMessageTs: item.timestamp ?? Math.floor(Date.now() / 1000) } }];"
+                                                           }
+                                        },
+                                        {
+                                            "id":  "redis-set-debounce-ts",
+                                            "name":  "Redis SET Debounce TS",
+                                            "type":  "n8n-nodes-base.redis",
+                                            "typeVersion":  1,
+                                            "position":  [
+                                                             1940,
+                                                             300
+                                                         ],
+                                            "credentials":  {
+                                                                "redis":  {
+                                                                              "id":  "zkKpThv7TlkK3IoB",
+                                                                              "name":  "Redis Vendly"
+                                                                          }
+                                                            },
+                                            "parameters":  {
+                                                               "operation":  "set",
+                                                               "key":  "={{ \u0027debounce_ts:cw:\u0027 + $json.conversation_id }}",
+                                                               "value":  "={{ $json.ts }}",
+                                                               "expire":  true,
+                                                               "ttl":  10
+                                                           }
+                                        },
+                                        {
+                                            "id":  "call-debounce",
+                                            "name":  "Chamar Debounce",
+                                            "type":  "n8n-nodes-base.httpRequest",
+                                            "typeVersion":  4.2,
+                                            "position":  [
+                                                             2180,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "method":  "POST",
+                                                               "url":  "https://workflows.vendly.chat/webhook/debounce-trigger",
+                                                               "sendBody":  true,
+                                                               "specifyBody":  "json",
+                                                               "jsonBody":  "={{ JSON.stringify({ conversation_id: $json.conversation_id, account_id: $json.account_id, instance: $json.instance, telefone: $json.telefone, pushName: $json.pushName, ts: $json.ts, cw_message_id: $json.cw_message_id }) }}",
+                                                               "options":  {
+                                                                               "response":  {
+                                                                                                "response":  {
+                                                                                                                 "neverError":  true
+                                                                                                             }
+                                                                                            }
+                                                                           }
+                                                           }
+                                        },
+                                        {
+                                            "id":  "push-buffer-in",
+                                            "name":  "PUSH Buffer",
+                                            "type":  "n8n-nodes-base.redis",
+                                            "typeVersion":  1,
+                                            "position":  [
+                                                             1440,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "operation":  "push",
+                                                               "list":  "={{ \u0027buffer:cw:\u0027 + $json.conversation_id }}",
+                                                               "messageData":  "={{ JSON.stringify($json) }}"
+                                                           },
+                                            "credentials":  {
+                                                                "redis":  {
+                                                                              "id":  "zkKpThv7TlkK3IoB",
+                                                                              "name":  "Redis Vendly"
+                                                                          }
+                                                            }
+                                        },
+                                        {
+                                            "id":  "redis-get-dedup",
+                                            "name":  "Redis GET Dedup",
+                                            "type":  "n8n-nodes-base.redis",
+                                            "typeVersion":  1,
+                                            "position":  [
+                                                             1140,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "operation":  "get",
+                                                               "key":  "={{ \u0027cw_dedup:\u0027 + $json.conversation_id + \u0027:\u0027 + $json.timestamp }}",
+                                                               "propertyName":  "dedup_seen",
+                                                               "options":  {
+
+                                                                           }
+                                                           },
+                                            "credentials":  {
+                                                                "redis":  {
+                                                                              "id":  "zkKpThv7TlkK3IoB",
+                                                                              "name":  "Redis Vendly"
+                                                                          }
+                                                            }
+                                        },
+                                        {
+                                            "id":  "if-dedup",
+                                            "name":  "IF Já Processado?",
+                                            "type":  "n8n-nodes-base.if",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             1380,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "conditions":  {
+                                                                                  "options":  {
+                                                                                                  "caseSensitive":  false,
+                                                                                                  "typeValidation":  "loose"
+                                                                                              },
+                                                                                  "conditions":  [
+                                                                                                     {
+                                                                                                         "id":  "dedup-check",
+                                                                                                         "leftValue":  "={{ $json.dedup_seen ?? \u0027\u0027 }}",
+                                                                                                         "rightValue":  "",
+                                                                                                         "operator":  {
+                                                                                                                          "type":  "string",
+                                                                                                                          "operation":  "notEmpty"
+                                                                                                                      }
+                                                                                                     }
+                                                                                                 ],
+                                                                                  "combinator":  "and"
+                                                                              }
+                                                           }
+                                        },
+                                        {
+                                            "id":  "redis-set-dedup",
+                                            "name":  "Redis SET Dedup",
+                                            "type":  "n8n-nodes-base.redis",
+                                            "typeVersion":  1,
+                                            "position":  [
+                                                             1620,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "operation":  "set",
+                                                               "key":  "={{ \u0027cw_dedup:\u0027 + $json.conversation_id + \u0027:\u0027 + $json.timestamp }}",
+                                                               "value":  "1",
+                                                               "expire":  true,
+                                                               "ttl":  120,
+                                                               "keyType":  "string"
+                                                           },
+                                            "credentials":  {
+                                                                "redis":  {
+                                                                              "id":  "zkKpThv7TlkK3IoB",
+                                                                              "name":  "Redis Vendly"
+                                                                          }
+                                                            }
+                                        },
+                                        {
+                                            "id":  "restaurar-item-dedup",
+                                            "name":  "Restaurar Item Dedup",
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             1620,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "jsCode":  "// Redis GET Dedup substitui o item por {dedup_seen: value}, perdendo os campos originais.\n// Restauramos o item original do Normalizar Mensagem antes de prosseguir.\nconst original = $(\u0027Normalizar Mensagem\u0027).first().json;\nreturn [{ json: original }];"
+                                                           }
+                                        },
+                                        {
+                                            "id":  "auto-accept-conv-1779655662184",
+                                            "name":  "Auto-Aceitar Conversa",
+                                            "type":  "n8n-nodes-base.code",
+                                            "typeVersion":  2,
+                                            "position":  [
+                                                             920,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "jsCode":  "// Verificar se há takeover humano ativo e auto-aceitar conversa pendente\nconst msg = $input.first().json;\n\n// Se Redis tem chave human_takeover → humano controla → bot silencia\nconst takeover = msg.takeover_value ?? null;\nif (takeover !== null \u0026\u0026 takeover !== \u0027\u0027) {\n  return [];\n}\n\n// Auto-aceitar conversa pendente (sem isso, Agent Bot não consegue operar)\nif (msg.conversation_id \u0026\u0026 msg.conversation_status === \u0027pending\u0027) {\n  try {\n    await fetch(\n      \u0027https://chatwoot.vendly.chat/api/v1/accounts/1/conversations/\u0027 + msg.conversation_id + \u0027/toggle_status\u0027,\n      {\n        method: \u0027POST\u0027,\n        headers: { \u0027Content-Type\u0027: \u0027application/json\u0027, \u0027api_access_token\u0027: \u0027Db9GHGsN9YVUDhJvD5CHbVTz\u0027 },\n        body: JSON.stringify({ status: \u0027open\u0027 }),\n      }\n    );\n  } catch (e) {}\n}\n\nreturn [$input.first()];"
+                                                           }
+                                        },
+                                        {
+                                            "id":  "redis-get-takeover",
+                                            "name":  "Redis GET human_takeover",
+                                            "type":  "n8n-nodes-base.redis",
+                                            "typeVersion":  1,
+                                            "position":  [
+                                                             700,
+                                                             300
+                                                         ],
+                                            "parameters":  {
+                                                               "operation":  "get",
+                                                               "key":  "={{ \u0027human_takeover:\u0027 + $json.instance + \u0027:\u0027 + $json.telefone }}",
+                                                               "propertyName":  "takeover_value",
+                                                               "options":  {
+
+                                                                           }
+                                                           },
+                                            "credentials":  {
+                                                                "redis":  {
+                                                                              "id":  "zkKpThv7TlkK3IoB",
+                                                                              "name":  "Redis Vendly"
+                                                                          }
+                                                            }
+                                        }
+                                    ],
+                          "connections":  {
+                                              "Webhook Evolution":  {
+                                                                        "main":  [
+                                                                                     [
+                                                                                         {
+                                                                                             "node":  "Normalizar Mensagem",
+                                                                                             "type":  "main",
+                                                                                             "index":  0
+                                                                                         }
+                                                                                     ]
+                                                                                 ]
+                                                                    },
+                                              "Normalizar Mensagem":  {
+                                                                          "main":  [
+                                                                                       [
+                                                                                           {
+                                                                                               "node":  "Redis GET human_takeover",
+                                                                                               "type":  "main",
+                                                                                               "index":  0
+                                                                                           }
+                                                                                       ]
+                                                                                   ]
+                                                                      },
+                                              "PUSH Buffer":  {
+                                                                  "main":  [
+                                                                               [
+                                                                                   {
+                                                                                       "node":  "Setar Timestamp Debounce",
+                                                                                       "type":  "main",
+                                                                                       "index":  0
+                                                                                   }
+                                                                               ]
+                                                                           ]
+                                                              },
+                                              "Setar Timestamp Debounce":  {
+                                                                               "main":  [
+                                                                                            [
+                                                                                                {
+                                                                                                    "node":  "Redis SET Debounce TS",
+                                                                                                    "type":  "main",
+                                                                                                    "index":  0
+                                                                                                }
+                                                                                            ]
+                                                                                        ]
+                                                                           },
+                                              "Redis SET Debounce TS":  {
+                                                                            "main":  [
+                                                                                         [
+                                                                                             {
+                                                                                                 "node":  "Chamar Debounce",
+                                                                                                 "type":  "main",
+                                                                                                 "index":  0
+                                                                                             }
+                                                                                         ]
+                                                                                     ]
+                                                                        },
+                                              "Redis GET Dedup":  {
+                                                                      "main":  [
+                                                                                   [
+                                                                                       {
+                                                                                           "node":  "IF Já Processado?",
+                                                                                           "type":  "main",
+                                                                                           "index":  0
+                                                                                       }
+                                                                                   ]
+                                                                               ]
+                                                                  },
+                                              "IF Já Processado?":  {
+                                                                        "main":  [
+                                                                                     [
+
+                                                                                     ],
+                                                                                     [
+                                                                                         {
+                                                                                             "node":  "Restaurar Item Dedup",
+                                                                                             "type":  "main",
+                                                                                             "index":  0
+                                                                                         }
+                                                                                     ]
+                                                                                 ]
+                                                                    },
+                                              "Redis SET Dedup":  {
+                                                                      "main":  [
+                                                                                   [
+                                                                                       {
+                                                                                           "node":  "PUSH Buffer",
+                                                                                           "type":  "main",
+                                                                                           "index":  0
+                                                                                       }
+                                                                                   ]
+                                                                               ]
+                                                                  },
+                                              "Restaurar Item Dedup":  {
+                                                                           "main":  [
+                                                                                        [
+                                                                                            {
+                                                                                                "node":  "Redis SET Dedup",
+                                                                                                "type":  "main",
+                                                                                                "index":  0
+                                                                                            }
+                                                                                        ]
+                                                                                    ]
+                                                                       },
+                                              "Auto-Aceitar Conversa":  {
+                                                                            "main":  [
+                                                                                         [
+                                                                                             {
+                                                                                                 "node":  "Redis GET Dedup",
+                                                                                                 "type":  "main",
+                                                                                                 "index":  0
+                                                                                             }
+                                                                                         ]
+                                                                                     ]
+                                                                        },
+                                              "Redis GET human_takeover":  {
+                                                                               "main":  [
+                                                                                            [
+                                                                                                {
+                                                                                                    "node":  "Auto-Aceitar Conversa",
+                                                                                                    "type":  "main",
+                                                                                                    "index":  0
+                                                                                                }
+                                                                                            ]
+                                                                                        ]
+                                                                           }
+                                          },
+                          "authors":  "Naldo Cabral",
+                          "name":  null,
+                          "description":  null,
+                          "autosaved":  false,
+                          "workflowPublishHistory":  [
+                                                         {
+                                                             "createdAt":  "2026-05-24T21:39:08.960Z",
+                                                             "id":  324,
+                                                             "workflowId":  "bEb19TdWZfFloisU",
+                                                             "versionId":  "c7703adb-53ff-42ce-95cb-740b4633963c",
+                                                             "event":  "activated",
+                                                             "userId":  "c95f53fe-34f2-46ef-86bf-dd1eaa6142d6"
+                                                         },
+                                                         {
+                                                             "createdAt":  "2026-05-24T21:39:08.928Z",
+                                                             "id":  323,
+                                                             "workflowId":  "bEb19TdWZfFloisU",
+                                                             "versionId":  "c7703adb-53ff-42ce-95cb-740b4633963c",
+                                                             "event":  "deactivated",
+                                                             "userId":  "c95f53fe-34f2-46ef-86bf-dd1eaa6142d6"
+                                                         }
+                                                     ]
+                      }
+}

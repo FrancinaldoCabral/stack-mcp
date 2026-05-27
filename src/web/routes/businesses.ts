@@ -285,6 +285,11 @@ businessesRouter.post('/:id/add-instance', async (req, res) => {
       { $set: { instances, instanceInboxes: existingInboxes, updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
+    // Propagar filtro de contatos (se houver) para a nova instância no Redis
+    if (updated) {
+      const filter = sanitizeFilter(updated.contactFilter as Partial<ContactFilter> | undefined);
+      await syncFilterToRedis([iName], filter);
+    }
     res.json(updated);
   } catch (e) {
     const err = e as { response?: { data?: unknown }; message?: string };
@@ -754,6 +759,88 @@ businessesRouter.put('/:id/instances/:name/assign-agent', async (req, res) => {
     await syncAgentToRedis(instanceName, agent);
 
     res.json(updated);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ── Filtro de contatos (blacklist/whitelist) ────────────────────────────────
+// Modelo: business.contactFilter = { mode, contacts: string[], groups: string[] }
+// Cache rápido para workflow N8N em Redis: contact_filter:{instance} (JSON ou vazio).
+
+interface ContactFilter {
+  mode: 'blacklist' | 'whitelist';
+  contacts: string[];
+  groups: string[];
+}
+
+const defaultFilter: ContactFilter = { mode: 'blacklist', contacts: [], groups: [] };
+
+function normalizePhone(p: string): string { return String(p ?? '').replace(/\D/g, ''); }
+function normalizeJid(j: string): string {
+  const v = String(j ?? '').trim();
+  return v.endsWith('@g.us') ? v : v;
+}
+function sanitizeFilter(f: Partial<ContactFilter> | undefined | null): ContactFilter {
+  const mode = f?.mode === 'whitelist' ? 'whitelist' : 'blacklist';
+  const contacts = Array.from(new Set((f?.contacts ?? []).map(normalizePhone).filter(Boolean)));
+  const groups = Array.from(new Set((f?.groups ?? []).map(normalizeJid).filter(g => g.endsWith('@g.us'))));
+  return { mode, contacts, groups };
+}
+
+async function syncFilterToRedis(instances: string[], filter: ContactFilter): Promise<void> {
+  try {
+    const redis = getRedis();
+    const payload = JSON.stringify(filter);
+    for (const inst of instances) {
+      await redis.set(`contact_filter:${inst}`, payload);
+    }
+  } catch (e) { console.warn('syncFilterToRedis falhou', e); }
+}
+
+// GET /api/businesses/:id/contact-filter
+businessesRouter.get('/:id/contact-filter', async (req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('businesses').findOne(
+      { _id: new ObjectId(req.params.id) },
+      { projection: { contactFilter: 1 } },
+    );
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    res.json({ contactFilter: sanitizeFilter(doc.contactFilter as Partial<ContactFilter> | undefined) });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// PUT /api/businesses/:id/contact-filter
+businessesRouter.put('/:id/contact-filter', async (req, res) => {
+  try {
+    const filter = sanitizeFilter(req.body as Partial<ContactFilter>);
+    const db = await getDb();
+    const updated = await db.collection('businesses').findOneAndUpdate(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { contactFilter: filter, updatedAt: new Date() } },
+      { returnDocument: 'after', projection: { instances: 1, contactFilter: 1 } },
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    const instances = (updated.instances as string[]) ?? [];
+    await syncFilterToRedis(instances, filter);
+    res.json({ contactFilter: filter });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// GET /api/businesses/:id/instances/:name/groups — proxy Evolution para listar grupos
+businessesRouter.get('/:id/instances/:name/groups', async (req, res) => {
+  try {
+    const r = await axios.get(
+      `${config.evolution.url}/group/fetchAllGroups/${encodeURIComponent(req.params.name)}?getParticipants=false`,
+      { headers: { apikey: config.evolution.apiKey }, timeout: 15_000, validateStatus: () => true },
+    );
+    if (r.status >= 400) return res.status(r.status).json({ error: r.data });
+    const arr = Array.isArray(r.data) ? r.data : [];
+    const groups = arr.map((g: { id?: string; subject?: string; size?: number }) => ({
+      id: g.id ?? '',
+      subject: g.subject ?? '(sem nome)',
+      size: g.size ?? 0,
+    })).filter((g: { id: string }) => g.id.endsWith('@g.us'));
+    res.json({ groups });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 

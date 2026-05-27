@@ -2,16 +2,16 @@
 import {
   Button, Table, Modal, Form, Input, Space, Typography, message,
   Spin, Result, Badge, Tooltip, AutoComplete,
-  Select, Popconfirm, Divider, Tag,
+  Select, Popconfirm, Divider, Tag, Radio, Alert,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, MessageOutlined, DeleteOutlined,
   LinkOutlined, DisconnectOutlined, WifiOutlined, CopyOutlined, RobotOutlined,
-  BellOutlined,
+  BellOutlined, FilterOutlined, SaveOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { Business, Agent } from '../lib/types';
+import type { Business, Agent, ContactFilter, WhatsAppGroup } from '../lib/types';
 
 const { Title, Text } = Typography;
 
@@ -230,6 +230,164 @@ function InstancesPanel({
             ))
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// Seção de filtro de contatos (blacklist/whitelist)
+
+function ContactFilterSection({ business }: { business: Business }) {
+  const qc = useQueryClient();
+  const [mode, setMode] = useState<'blacklist' | 'whitelist'>('blacklist');
+  const [contacts, setContacts] = useState<string[]>([]);
+  const [groups, setGroups] = useState<string[]>([]);
+  const [newContact, setNewContact] = useState('');
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Carrega filtro atual
+  const { data: filterData, isLoading } = useQuery({
+    queryKey: ['contact-filter', business._id],
+    queryFn: () => api.getContactFilter(business._id),
+  });
+
+  useEffect(() => {
+    if (filterData?.contactFilter) {
+      setMode(filterData.contactFilter.mode);
+      setContacts(filterData.contactFilter.contacts ?? []);
+      setGroups(filterData.contactFilter.groups ?? []);
+      setDirty(false);
+    }
+  }, [filterData]);
+
+  // Carrega grupos da primeira instância (que tiver)
+  const firstInstance = business.instances?.[0];
+  const { data: groupsData, isLoading: loadingGroups } = useQuery<{ groups: WhatsAppGroup[] }>({
+    queryKey: ['groups', business._id, firstInstance],
+    queryFn: () => api.getInstanceGroups(business._id, firstInstance!),
+    enabled: !!firstInstance,
+    staleTime: 60_000,
+  });
+
+  const groupOptions = (groupsData?.groups ?? []).map(g => ({
+    value: g.id,
+    label: `${g.subject}${g.size ? ` (${g.size})` : ''}`,
+  }));
+
+  const addContact = () => {
+    const digits = newContact.replace(/\D/g, '');
+    if (!digits) return;
+    if (contacts.includes(digits)) { message.warning('Número já está na lista'); return; }
+    setContacts([...contacts, digits]);
+    setNewContact('');
+    setDirty(true);
+  };
+
+  const removeContact = (phone: string) => {
+    setContacts(contacts.filter(c => c !== phone));
+    setDirty(true);
+  };
+
+  const save = async () => {
+    const filter: ContactFilter = { mode, contacts, groups };
+    if (mode === 'whitelist' && contacts.length === 0 && groups.length === 0) {
+      message.warning('Whitelist vazia bloqueia TODAS as mensagens. Adicione pelo menos um contato ou grupo, ou volte para "Não falar com esses".');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.updateContactFilter(business._id, filter);
+      qc.invalidateQueries({ queryKey: ['contact-filter', business._id] });
+      setDirty(false);
+      message.success('Filtro salvo');
+    } catch (e) { message.error((e as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ padding: '10px 48px 12px' }}>
+      <Text style={{ fontSize: 11, textTransform: 'uppercase', color: '#999', fontWeight: 600, letterSpacing: 0.5 }}>
+        <FilterOutlined style={{ marginRight: 4 }} />Filtro de Contatos
+      </Text>
+      <div style={{ marginTop: 8, color: '#888', fontSize: 12, marginBottom: 10 }}>
+        Define quais contatos/grupos o bot atende. Útil para quem usa o mesmo número para uso pessoal e profissional.
+      </div>
+      {isLoading ? <Spin size="small" /> : (
+        <>
+          <Radio.Group
+            value={mode}
+            onChange={e => { setMode(e.target.value); setDirty(true); }}
+            style={{ marginBottom: 12 }}
+          >
+            <Radio.Button value="blacklist">Não falar com esses contatos</Radio.Button>
+            <Radio.Button value="whitelist">Falar apenas com esses contatos</Radio.Button>
+          </Radio.Group>
+
+          {mode === 'whitelist' && contacts.length === 0 && groups.length === 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 10 }}
+              message="Whitelist vazia: o bot não responderá ninguém até você adicionar contatos ou grupos."
+            />
+          )}
+
+          <div style={{ marginBottom: 12 }}>
+            <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+              Grupos {loadingGroups && <Spin size="small" style={{ marginLeft: 6 }} />}
+            </Text>
+            {!firstInstance ? (
+              <div style={{ color: '#bbb', fontSize: 12, fontStyle: 'italic' }}>Adicione um número WhatsApp primeiro para listar grupos.</div>
+            ) : (
+              <Select
+                mode="multiple"
+                allowClear
+                style={{ width: '100%', maxWidth: 600 }}
+                placeholder={loadingGroups ? 'Carregando grupos...' : 'Selecione grupos'}
+                value={groups}
+                onChange={(vals) => { setGroups(vals); setDirty(true); }}
+                options={groupOptions}
+                optionFilterProp="label"
+                showSearch
+                notFoundContent={loadingGroups ? <Spin size="small" /> : 'Nenhum grupo encontrado'}
+              />
+            )}
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>Contatos individuais</Text>
+            <Space wrap style={{ marginBottom: 8 }}>
+              {contacts.length === 0 && (
+                <span style={{ color: '#bbb', fontSize: 12, fontStyle: 'italic' }}>Nenhum contato.</span>
+              )}
+              {contacts.map(phone => (
+                <Tag key={phone} closable onClose={() => removeContact(phone)} style={{ fontSize: 13, padding: '2px 8px' }}>
+                  +{phone}
+                </Tag>
+              ))}
+            </Space>
+            <Space.Compact style={{ width: '100%', maxWidth: 340 }}>
+              <Input
+                placeholder="Ex: 5521999999999"
+                value={newContact}
+                onChange={e => setNewContact(e.target.value)}
+                onPressEnter={addContact}
+              />
+              <Button icon={<PlusOutlined />} onClick={addContact}>Adicionar</Button>
+            </Space.Compact>
+          </div>
+
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={saving}
+            disabled={!dirty}
+            onClick={save}
+          >
+            Salvar filtro
+          </Button>
+        </>
       )}
     </div>
   );
@@ -575,6 +733,8 @@ Atendo clientes pelo WhatsApp com cordialidade e agilidade, respondendo dúvidas
               />
               <Divider style={{ margin: '8px 0' }} />
               <NotifyListSection business={b} />
+              <Divider style={{ margin: '8px 0' }} />
+              <ContactFilterSection business={b} />
             </div>
           ),
         }}
