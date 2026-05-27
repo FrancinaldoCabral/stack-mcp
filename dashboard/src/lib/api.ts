@@ -65,6 +65,14 @@ export const api = {
   getChatwootStatus: (bizId: string, instanceName: string) =>
     req<{ configured: boolean; inboxId: number | null; botEnabled: boolean; agentBot?: { id: number; name: string } | null }>(`/businesses/${bizId}/instances/${encodeURIComponent(instanceName)}/chatwoot-status`),
 
+  // Escalation notify list
+  getNotifyList: (id: string) =>
+    req<{ escalationNotifyList: string[] }>(`/businesses/${id}/notify-list`),
+  addNotifyContact: (id: string, phone: string) =>
+    req<{ escalationNotifyList: string[] }>(`/businesses/${id}/notify-list`, { method: 'POST', body: JSON.stringify({ phone, action: 'add' }) }),
+  removeNotifyContact: (id: string, phone: string) =>
+    req<{ escalationNotifyList: string[] }>(`/businesses/${id}/notify-list`, { method: 'POST', body: JSON.stringify({ phone, action: 'remove' }) }),
+
   // Customers
   getCustomers: (params?: Record<string, string>) => {
     const q = params ? '?' + new URLSearchParams(params).toString() : '';

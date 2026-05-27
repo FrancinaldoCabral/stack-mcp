@@ -21,6 +21,7 @@ export interface Business {
   agents: Agent[];
   instanceAgents: Record<string, string>;   // instanceName → agent._id
   instanceInboxes?: Record<string, number>; // instanceName → chatwootInboxId
+  escalationNotifyList?: string[];            // números que recebem WA quando bot escala
   createdAt: string;
   updatedAt: string;
 }

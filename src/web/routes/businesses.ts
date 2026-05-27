@@ -756,3 +756,38 @@ businessesRouter.put('/:id/instances/:name/assign-agent', async (req, res) => {
     res.json(updated);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
+
+// GET /api/businesses/:id/notify-list
+businessesRouter.get('/:id/notify-list', async (req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('businesses').findOne(
+      { _id: new ObjectId(req.params.id) },
+      { projection: { escalationNotifyList: 1 } },
+    );
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    res.json({ escalationNotifyList: (doc.escalationNotifyList as string[]) ?? [] });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// POST /api/businesses/:id/notify-list — add or remove a phone
+businessesRouter.post('/:id/notify-list', async (req, res) => {
+  try {
+    const { phone, action } = req.body as { phone?: string; action?: 'add' | 'remove' };
+    const digits = String(phone ?? '').replace(/\D/g, '');
+    if (!digits) return res.status(400).json({ error: 'phone inválido' });
+    if (action !== 'add' && action !== 'remove') return res.status(400).json({ error: 'action deve ser add ou remove' });
+
+    const db = await getDb();
+    const op = action === 'add'
+      ? { $addToSet: { escalationNotifyList: digits }, $set: { updatedAt: new Date() } }
+      : { $pull: { escalationNotifyList: digits } as Record<string, unknown>, $set: { updatedAt: new Date() } };
+    const updated = await (db.collection('businesses') as any).findOneAndUpdate(
+      { _id: new ObjectId(req.params.id) },
+      op,
+      { returnDocument: 'after' },
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    res.json({ escalationNotifyList: (updated.escalationNotifyList as string[]) ?? [] });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});

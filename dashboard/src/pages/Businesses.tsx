@@ -7,6 +7,7 @@ import {
 import {
   PlusOutlined, EditOutlined, MessageOutlined, DeleteOutlined,
   LinkOutlined, DisconnectOutlined, WifiOutlined, CopyOutlined, RobotOutlined,
+  BellOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -229,6 +230,83 @@ function InstancesPanel({
             ))
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// Seção de contatos de notificação de escalada
+
+function NotifyListSection({ business }: { business: Business }) {
+  const qc = useQueryClient();
+  const [newPhone, setNewPhone] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['notify-list', business._id],
+    queryFn: () => api.getNotifyList(business._id),
+  });
+
+  const list = data?.escalationNotifyList ?? [];
+
+  const add = async () => {
+    const digits = newPhone.replace(/\D/g, '');
+    if (!digits) return;
+    setAdding(true);
+    try {
+      await api.addNotifyContact(business._id, digits);
+      qc.invalidateQueries({ queryKey: ['notify-list', business._id] });
+      setNewPhone('');
+      message.success('Número adicionado');
+    } catch (e) { message.error((e as Error).message); }
+    finally { setAdding(false); }
+  };
+
+  const remove = async (phone: string) => {
+    try {
+      await api.removeNotifyContact(business._id, phone);
+      qc.invalidateQueries({ queryKey: ['notify-list', business._id] });
+      message.success('Número removido');
+    } catch (e) { message.error((e as Error).message); }
+  };
+
+  return (
+    <div style={{ padding: '10px 48px 12px' }}>
+      <Text style={{ fontSize: 11, textTransform: 'uppercase', color: '#999', fontWeight: 600, letterSpacing: 0.5 }}>
+        <BellOutlined style={{ marginRight: 4 }} />Notificações de Escalada (WhatsApp)
+      </Text>
+      <div style={{ marginTop: 8, color: '#888', fontSize: 12, marginBottom: 8 }}>
+        Quando o bot escalar para humano, estes números recebem mensagem de aviso no WhatsApp.
+      </div>
+      {isLoading ? <Spin size="small" /> : (
+        <>
+          {list.length === 0 && (
+            <div style={{ color: '#bbb', fontSize: 12, fontStyle: 'italic', marginBottom: 8 }}>Nenhum número cadastrado.</div>
+          )}
+          <Space wrap style={{ marginBottom: 8 }}>
+            {list.map(phone => (
+              <Tag
+                key={phone}
+                closable
+                onClose={() => remove(phone)}
+                style={{ fontSize: 13, padding: '2px 8px' }}
+              >
+                +{phone}
+              </Tag>
+            ))}
+          </Space>
+          <Space.Compact style={{ width: '100%', maxWidth: 340 }}>
+            <Input
+              placeholder="Ex: 5521999999999"
+              value={newPhone}
+              onChange={e => setNewPhone(e.target.value)}
+              onPressEnter={add}
+            />
+            <Button type="primary" icon={<PlusOutlined />} loading={adding} onClick={add}>
+              Adicionar
+            </Button>
+          </Space.Compact>
+        </>
       )}
     </div>
   );
@@ -495,6 +573,8 @@ Atendo clientes pelo WhatsApp com cordialidade e agilidade, respondendo dúvidas
                 onSendLink={openSendLink}
                 onAssignAgent={(instanceName, agentId) => assignAgent.mutate({ bizId: b._id, instanceName, agentId })}
               />
+              <Divider style={{ margin: '8px 0' }} />
+              <NotifyListSection business={b} />
             </div>
           ),
         }}
