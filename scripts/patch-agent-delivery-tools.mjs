@@ -150,29 +150,19 @@ const DELIVERY_TOOL_DEFS = {
   },
 };
 
-// ── jsonBody do OpenRouter (com tools dinâmicas) ──────────────────────────────
-const OPENROUTER_BODY = `={{ (() => {
-  const DEFS = ${JSON.stringify(DELIVERY_TOOL_DEFS)};
-  const allowed = Array.isArray($json.toolsAllowed) ? $json.toolsAllowed : [];
-  const baseTools = [{
-    type: 'function',
-    function: {
-      name: 'buscar_memoria',
-      description: 'Busca na base de conhecimento do negócio (RAG). Use para perguntas sobre produtos, preços, políticas, FAQs.',
-      parameters: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } },
-    },
-  }];
-  const extraTools = allowed
-    .filter(n => DEFS[n])
-    .map(n => ({ type: 'function', function: { name: n, ...DEFS[n] } }));
-  return JSON.stringify({
-    model: $json.model || 'google/gemini-2.5-flash-lite',
-    messages: $json.messages,
-    temperature: 0.8,
-    tools: [...baseTools, ...extraTools],
-    tool_choice: 'auto',
-  });
-})() }}`;
+// ── jsonBody do OpenRouter (referência simples; body montado no Construir Prompt) ──
+const OPENROUTER_BODY = `={{ $json.openRouterBody }}`;
+
+// Código a ser injetado no fim do Construir Prompt para preparar o body do OpenRouter
+const OPENROUTER_BODY_SNIPPET = `
+/* delivery-openrouter-body */
+const __DEFS = ${JSON.stringify(DELIVERY_TOOL_DEFS)};
+const __allowed = Array.isArray(__deliveryCtx.toolsAllowed) ? __deliveryCtx.toolsAllowed : [];
+const __baseTools = [{ type: 'function', function: { name: 'buscar_memoria', description: 'Busca na base de conhecimento do negócio (RAG). Use para perguntas sobre produtos, preços, políticas, FAQs.', parameters: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } } } }];
+const __extraTools = __allowed.filter(n => __DEFS[n]).map(n => ({ type: 'function', function: { name: n, ...__DEFS[n] } }));
+const __model = businessDoc?.settings?.model || 'google/gemini-2.5-flash-lite';
+const __openRouterBody = JSON.stringify({ model: __model, messages, temperature: 0.8, tools: [...__baseTools, ...__extraTools], tool_choice: 'auto' });
+`;
 
 // ── Novo Extrair Query Ferramenta (propaga args completos) ────────────────────
 const NEW_EXTRAIR_CODE = `const resp = $input.first().json;
@@ -327,13 +317,37 @@ async function main() {
     // E propaga toolsAllowed no return final
     code = code.replace(
       `return [{ json: { ...msg, messages, historico, respondWithAudio } }];`,
-      `return [{ json: { ...msg, messages, historico, respondWithAudio, toolsAllowed: __deliveryCtx.toolsAllowed || [], restaurantId: __deliveryCtx.restaurantId || null } }];`
+      `return [{ json: { ...msg, messages, historico, respondWithAudio, toolsAllowed: __deliveryCtx.toolsAllowed || [], restaurantId: __deliveryCtx.restaurantId || null, openRouterBody: __openRouterBody, model: __model } }];`
     );
     construir.parameters.jsCode = code;
     console.log('✏️  Construir Prompt patcheado (contexto + toolsAllowed)');
   } else {
     console.log('✔️  Construir Prompt já tem patch delivery-ctx');
   }
+
+  // 3b. Garantir que o snippet do openRouterBody está presente e atualizado (idempotente)
+  const BODY_MARKER = '/* delivery-openrouter-body */';
+  let code2 = construir.parameters.jsCode;
+  // remove versão antiga (entre marker e a próxima linha 'const respondWithAudio')
+  if (code2.includes(BODY_MARKER)) {
+    const startIdx = code2.indexOf(BODY_MARKER);
+    const endIdx = code2.indexOf('const messages = [', startIdx);
+    if (endIdx > startIdx) {
+      code2 = code2.slice(0, startIdx) + code2.slice(endIdx);
+    }
+  }
+  // injeta antes de 'const messages = ['
+  const msgAnchor = 'const messages = [';
+  if (!code2.includes(BODY_MARKER)) {
+    code2 = code2.replace(msgAnchor, OPENROUTER_BODY_SNIPPET + '\n' + msgAnchor);
+  }
+  // Atualiza o return final para que use __openRouterBody/__model SEMPRE (mesmo em re-runs)
+  code2 = code2.replace(
+    /return \[\{ json: \{ \.\.\.msg, messages, historico, respondWithAudio[^}]*\} \}\];/,
+    `return [{ json: { ...msg, messages, historico, respondWithAudio, toolsAllowed: __deliveryCtx.toolsAllowed || [], restaurantId: __deliveryCtx.restaurantId || null, openRouterBody: __openRouterBody, model: __model } }];`
+  );
+  construir.parameters.jsCode = code2;
+  console.log('✏️  Construir Prompt: snippet openRouterBody garantido');
 
   // 4. Adicionar nós novos (idempotente)
   const ensureNode = (def) => {
