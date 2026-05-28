@@ -1,0 +1,140 @@
+﻿// Fontes: Desembalar Payload, Redis GET Sessao, MongoDB GET Business, MongoDB GET Cliente, Qdrant Search
+const msg = $('Desembalar Payload').first().json;
+
+
+// Perfil do cliente do MongoDB (alwaysOutputData: retorna {} se n�o encontrado)
+const clienteDoc = $('MongoDB GET Cliente').first().json ?? {};
+const hasCustomer = !!(clienteDoc._id || clienteDoc.name);
+
+// Config do neg�cio do MongoDB (alwaysOutputData: retorna {} se n�o encontrado)
+const businessDoc = $('MongoDB GET Business').first().json ?? {};
+/* persona-override-injected */
+const __personaOverride = (typeof $ === 'function' ? $('Resolver Persona').first()?.json?.systemPromptOverride : null) || '';
+const customSystemPrompt = __personaOverride || businessDoc?.systemPrompt || '';
+/* delivery-ctx-injected */
+const __deliveryCtx = (typeof $ === 'function' ? $('Resolver Persona').first()?.json : null) || {};
+/* delivery-last-draft-lookup */
+let __lastDraft = null;
+if (__deliveryCtx.restaurantId) {
+  try {
+    const __mcpUrl = 'http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io/mcp';
+    const __r = await fetch(__mcpUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: 'delivery_list_orders', arguments: { restaurantId: __deliveryCtx.restaurantId, status: 'rascunho', limit: 1 } } }),
+    });
+    const __txt = await __r.text();
+    const __dline = __txt.split('\n').reverse().find(l => l.startsWith('data:'));
+    if (__dline) {
+      const __j = JSON.parse(__dline.slice(5).trim());
+      const __content = __j?.result?.content?.[0]?.text;
+      if (__content) {
+        const __parsed = JSON.parse(__content);
+        const __o = (__parsed.orders || __parsed.items || (Array.isArray(__parsed) ? __parsed : []))[0];
+        if (__o && (__o._id || __o.id)) {
+          __lastDraft = { orderId: __o._id || __o.id, orderRef: __o.orderRef || __o.ref || '', summary: __o };
+        }
+      }
+    }
+  } catch (e) {}
+}
+const __draftLine = __lastDraft ? `\n- ÚLTIMO RASCUNHO (use este orderId em delivery_confirm_order / delivery_update_draft): orderId=${__lastDraft.orderId}, orderRef=${__lastDraft.orderRef}` : '';
+const __ctxBlock = __deliveryCtx.restaurantId ? `\n\n## Contexto Operacional\n- restaurantId: ${__deliveryCtx.restaurantId}\n- personaKey: ${__deliveryCtx.personaKey || ''}\n- Use este restaurantId em TODAS as chamadas de ferramenta delivery_*.${__draftLine}` : '';
+
+
+// Blocos de intelig�ncia do Qdrant (neverError: true - retorna {} se falhar)
+const qdrantBlocks = ($('Qdrant Search Contexto').first()?.json?.result ?? [])
+  .filter(r => (r.score ?? 0) >= 0.4)
+  .map(r => r.payload?.content ?? '')
+  .filter(Boolean);
+const intelligenceCtx = qdrantBlocks.length > 0
+  ? '\n\n## Base de Conhecimento:\n' + qdrantBlocks.map((b, i) => `${i+1}. ${b}`).join('\n')
+  : '';
+
+// Hist�rico - vem do Mesclar Hist�rico (que j� fundiu Redis sess�o + Chatwoot)
+let historico = [];
+try { historico = $('Mesclar Hist�rico').first().json.historico ?? []; } catch {}
+
+// Contexto do cliente
+const customerCtx = hasCustomer
+  ? `\nCliente: ${clienteDoc.name || msg.pushName || 'cliente'} | Intera��es: ${clienteDoc.conversation_count || 0}.${clienteDoc.profile?.notes ? ' ' + clienteDoc.profile.notes : ''}`
+  : '';
+
+// System prompt (neg�cio espec�fico ou padr�o)
+const defaultPrompt = `Voc� � um assistente da Vendly. Responda em portugu�s, de forma natural e amig�vel.
+Nome do cliente: ${msg.pushName || 'cliente'}
+Canal: WhatsApp
+Inst�ncia: ${msg.instance}
+Regras:
+- Divida respostas longas em m�ltiplas mensagens curtas
+- Use emojis com modera��o
+- Nunca envie blocos longos de texto
+- Responda apenas ao que foi perguntado
+- Quando o usu�rio enviar �udio ou pedir resposta em �udio, responda normalmente - o sistema faz a convers�o TTS automaticamente`;
+
+const audioSystemNote = '\n\n[Sistema - PRIORIDADE MAXIMA] Voce tem capacidade total de enviar audio: o TTS converte seu texto em audio automaticamente. NUNCA diga que nao consegue enviar audio. NUNCA use timestamps ou datas nas respostas.';
+const escalaSystemNote = '\n\n## Transfer�ncia para Atendimento Humano\nQuando o cliente solicitar explicitamente falar com um humano/atendente/pessoa, estiver muito frustrado, ou a situa��o exigir interven��o humana imediata: inclua [ESCALAR_HUMANO] no in�cio da sua resposta. Exemplo: "[ESCALAR_HUMANO] Claro! Vou te conectar com um atendente agora. Um momento! ??". O sistema faz a transfer�ncia automaticamente. Ap�s o marcador, escreva normalmente a mensagem para o cliente.';
+const sistemaPrompt = (customSystemPrompt || defaultPrompt) + __ctxBlock + customerCtx + intelligenceCtx + audioSystemNote + escalaSystemNote;
+
+// Conte�do multimodal do usu�rio
+let userContent;
+if (msg.tipo === 'imagem' && msg.metadata?.url) {
+  userContent = [
+    { type: 'text', text: msg.conteudo || 'O cliente enviou uma imagem. Analise e responda:' },
+    { type: 'image_url', image_url: { url: msg.metadata.url } },
+  ];
+} else if (msg.tipo === 'audio') {
+  let transcricao = '';
+  let transcricaoDisponivel = false;
+  try {
+    const audioOk = $('Prep Transcri��o').first().json?.audioOk ?? false;
+    if (audioOk) {
+      const tJson = $('Transcrever �udio').first().json;
+      transcricao = (tJson?.choices?.[0]?.message?.content ?? '').trim();
+      transcricaoDisponivel = !!transcricao;
+    }
+  } catch {}
+  userContent = (transcricaoDisponivel && transcricao && transcricao !== '[mensagem de voz]')
+    ? `[Mensagem de voz]: ${transcricao}`
+    : '[usu�rio enviou um �udio - transcri��o n�o dispon�vel]';
+} else if (msg.tipo === 'documento') {
+  userContent = `[documento: ${msg.metadata?.fileName || msg.conteudo}]`;
+} else if (msg.tipo === 'video') {
+  userContent = `[v�deo enviado: ${msg.conteudo}]`;
+} else if (msg.tipo === 'localizacao') {
+  userContent = `[localiza��o: lat=${msg.metadata?.lat}, lng=${msg.metadata?.lng}]`;
+} else {
+  userContent = msg.conteudo;
+}
+
+// Detectar pedido de �udio na �ltima mensagem do usu�rio (texto simples)
+const userText = (typeof userContent === 'string' ? userContent : '').toLowerCase();
+const respondWithAudio = msg.tipo === 'audio' || /(?:manda?|envia?|responde?|fala)\s+(?:em\s+|por\s+|um\s+|uma?\s+)?[a�]udio|[a�]udio\s*(?:por favor|pfv?)?\s*$|prefiro\s+[a�]udio|pode\s+(?:falar|mandar\s+[a�]udio)|quero\s+(?:ouvir|[a�]udio)|em\s+[a�]udio|por\s+[a�]udio|fala\s+pra\s+mim/.test(userText);
+
+// audioModeNote fundido no system prompt (nunca como role:system no meio das msgs)
+const audioModeAppend = respondWithAudio
+  ? '\n\n[MODO �UDIO ATIVO]: Responda de forma NATURAL e CONVERSACIONAL, como se estivesse falando. Sem markdown (sem *, **, listas com -, #), sem timestamps, frases curtas e naturais.'
+  : '';
+const sistemaPromptFinal = sistemaPrompt + audioModeAppend;
+
+
+const messages = [
+  { role: 'system', content: sistemaPromptFinal },
+  ...historico.slice(-8),
+  { role: 'user', content: userContent },
+];
+
+/* delivery-openrouter-body */
+const __DEFS = {"delivery_draft_order":{"description":"Cria um pedido em RASCUNHO (não publica no grupo). Use ao capturar pedido pela primeira vez.","parameters":{"type":"object","required":["restaurantId"],"properties":{"restaurantId":{"type":"string","description":"ID do restaurante (passe o restaurantId do contexto)"},"clientName":{"type":"string"},"clientAddress":{"type":"string"},"clientPhone":{"type":"string"},"items":{"type":"array","items":{"type":"string"}},"value":{"type":"number"},"notes":{"type":"string"}}}},"delivery_update_draft":{"description":"Atualiza campos de um pedido em rascunho.","parameters":{"type":"object","required":["orderId"],"properties":{"orderId":{"type":"string"},"clientName":{"type":"string"},"clientAddress":{"type":"string"},"clientPhone":{"type":"string"},"items":{"type":"array","items":{"type":"string"}},"value":{"type":"number"},"notes":{"type":"string"}}}},"delivery_confirm_order":{"description":"Confirma o rascunho e PUBLICA AUTOMATICAMENTE o pedido no grupo dos entregadores. Use após confirmação textual do restaurante.","parameters":{"type":"object","required":["orderId"],"properties":{"orderId":{"type":"string"},"crossPost":{"type":"boolean"}}}},"delivery_update_order_status":{"description":"Atualiza status de um pedido. Espelha automaticamente no grupo de comandos.","parameters":{"type":"object","required":["orderId","status"],"properties":{"orderId":{"type":"string"},"status":{"type":"string","enum":["rascunho","pendente","aceito","a_caminho","no_restaurante","saindo","no_cliente","entregue","problema","cancelado"]},"note":{"type":"string"}}}},"delivery_assign_deliverer":{"description":"Atribui um entregador a um pedido.","parameters":{"type":"object","required":["orderId","delivererJid","delivererName"],"properties":{"orderId":{"type":"string"},"delivererJid":{"type":"string","description":"JID do entregador (ex: 5521xxx@s.whatsapp.net)"},"delivererName":{"type":"string"},"etaMin":{"type":"number"}}}},"delivery_log_settlement":{"description":"Registra um lançamento financeiro (débito = entregador deve à LT; crédito = LT deve ao entregador).","parameters":{"type":"object","required":["delivererJid","delivererName","type","amount"],"properties":{"delivererJid":{"type":"string"},"delivererName":{"type":"string"},"type":{"type":"string","enum":["debito","credito"]},"amount":{"type":"number"},"description":{"type":"string"},"restaurantId":{"type":"string"},"orderRef":{"type":"string"}}}},"delivery_post_to_command_group":{"description":"Envia mensagem ao grupo de COMANDOS do restaurante. Use para AVISAR o restaurante sobre status (ex: \"entregador a caminho\").","parameters":{"type":"object","required":["restaurantId","text"],"properties":{"restaurantId":{"type":"string"},"text":{"type":"string"}}}},"delivery_post_to_deliverer_group":{"description":"Envia mensagem ao grupo dos ENTREGADORES do restaurante.","parameters":{"type":"object","required":["restaurantId","text"],"properties":{"restaurantId":{"type":"string"},"text":{"type":"string"}}}},"delivery_get_order":{"description":"Consulta um pedido por ID ou referência (LT-XXXXXX).","parameters":{"type":"object","required":["orderIdOrRef"],"properties":{"orderIdOrRef":{"type":"string"}}}},"delivery_list_orders":{"description":"Lista pedidos com filtros opcionais.","parameters":{"type":"object","properties":{"restaurantId":{"type":"string"},"status":{"type":"string"},"delivererJid":{"type":"string"},"days":{"type":"number"},"limit":{"type":"number"}}}}};
+const __allowed = Array.isArray(__deliveryCtx.toolsAllowed) ? __deliveryCtx.toolsAllowed : [];
+const __baseTools = [{ type: 'function', function: { name: 'buscar_memoria', description: 'Busca na base de conhecimento do negócio (RAG). Use para perguntas sobre produtos, preços, políticas, FAQs.', parameters: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } } } }];
+const __extraTools = __allowed.filter(n => __DEFS[n]).map(n => ({ type: 'function', function: { name: n, ...__DEFS[n] } }));
+const __model = businessDoc?.settings?.model || 'google/gemini-2.5-flash-lite';
+const __lastUserText = (typeof userContent === 'string' ? userContent : (Array.isArray(userContent) ? (userContent.find(c=>c.type==='text')?.text||'') : '')).toLowerCase();
+const __looksLikeOrder = /(novo pedido|pedido novo|pedido:|preciso|cliente)/.test(__lastUserText) && /(r\$|rua|av\.|av\s|fone|tel|telefone|\d{8,})/.test(__lastUserText);
+const __looksLikeConfirm = /^(ok|manda|confirma|confirmar|pode mandar|pode enviar|enviar|fechou|beleza)\b/.test(__lastUserText.trim());
+const __forceTool = (__extraTools.length > 0) && (__looksLikeOrder || __looksLikeConfirm);
+const __toolChoice = __forceTool ? 'required' : 'auto';
+const __openRouterBody = JSON.stringify({ model: __model, messages, temperature: 0.8, tools: [...__baseTools, ...__extraTools], tool_choice: __toolChoice });
+
+return [{ json: { ...msg, messages, historico, respondWithAudio, toolsAllowed: __deliveryCtx.toolsAllowed || [], restaurantId: __deliveryCtx.restaurantId || null, openRouterBody: __openRouterBody, model: __model } }];
