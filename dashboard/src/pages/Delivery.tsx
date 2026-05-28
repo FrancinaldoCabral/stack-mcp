@@ -105,29 +105,39 @@ function RestaurantsTab() {
   const submit = () => form.validateFields().then(vals => editing ? update.mutate(vals) : create.mutate(vals));
 
   const cols = [
-    { title: 'Nome', dataIndex: 'name', key: 'name', sorter: (a: DeliveryRestaurant, b: DeliveryRestaurant) => a.name.localeCompare(b.name) },
     {
-      title: 'Negócio', dataIndex: 'businessId', key: 'biz',
-      render: (id: string | null) => {
-        if (!id) return <Text type="secondary">—</Text>;
-        const b = (businesses as Business[]).find(x => x._id === id);
-        return b ? b.name : <code style={{ fontSize: 11 }}>{id}</code>;
-      },
+      title: 'Restaurante', dataIndex: 'name', key: 'name',
+      sorter: (a: DeliveryRestaurant, b: DeliveryRestaurant) => a.name.localeCompare(b.name),
+      render: (name: string, r: DeliveryRestaurant) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{name}</Text>
+          {(() => {
+            const b = (businesses as Business[]).find(x => x._id === r.businessId);
+            return b ? <Text type="secondary" style={{ fontSize: 11 }}>{b.name}</Text> : null;
+          })()}
+        </Space>
+      ),
     },
     {
-      title: 'Comandos (JID)', dataIndex: 'commandJid', key: 'cmdJid',
+      title: 'Onde o restaurante envia pedidos', dataIndex: 'commandJid', key: 'cmdJid',
       render: (v: string, r: DeliveryRestaurant) => {
         const jid = v || r.commandGroupJid;
+        if (!jid || jid.startsWith('PENDENTE')) {
+          return <Tag color="orange">Configurar</Tag>;
+        }
         const isGroup = r.commandIsGroup ?? jid?.endsWith('@g.us');
-        return <span style={{ fontSize: 11 }}>{isGroup ? '👥' : '👤'} <code>{jid}</code></span>;
+        return <Space size={4}><span>{isGroup ? '👥 Grupo' : '👤 Contato'}</span></Space>;
       },
     },
     {
-      title: 'Entregadores (JID)', dataIndex: 'delivererGroupJid', key: 'dlvJid',
-      render: (v: string) => <span style={{ fontSize: 11 }}>👥 <code>{v}</code></span>,
+      title: 'Grupo dos entregadores', dataIndex: 'delivererGroupJid', key: 'dlvJid',
+      render: (v: string) => {
+        if (!v || v.startsWith('PENDENTE')) return <Tag color="orange">Configurar</Tag>;
+        return <Space size={4}><span>👥 Configurado</span></Space>;
+      },
     },
     {
-      title: 'Ativo', dataIndex: 'active', key: 'active',
+      title: 'Ativo', dataIndex: 'active', key: 'active', width: 80,
       render: (v: boolean, r: DeliveryRestaurant) => (
         <Switch
           checked={v}
@@ -139,7 +149,7 @@ function RestaurantsTab() {
       ),
     },
     {
-      title: 'Ações', key: 'actions',
+      title: 'Ações', key: 'actions', width: 140,
       render: (_: unknown, r: DeliveryRestaurant) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>Editar</Button>
@@ -154,7 +164,7 @@ function RestaurantsTab() {
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text type="secondary">Vincule cada restaurante a um negócio e selecione os JIDs (grupo de comandos pode ser um contato individual).</Text>
+        <Text type="secondary">Cada restaurante tem um grupo de WhatsApp onde recebe os pedidos e um grupo de entregadores que atende.</Text>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>Adicionar Restaurante</Button>
       </div>
 
@@ -182,15 +192,15 @@ function RestaurantsTab() {
           </Form.Item>
           <Form.Item
             name="businessId"
-            label="Negócio (instância WhatsApp da LivraisonTotale)"
-            rules={[{ required: true, message: 'Selecione o negócio dono da instância' }]}
-            extra="Os JIDs abaixo são lidos da primeira instância deste negócio."
+            label="Operação"
+            rules={[{ required: true, message: 'Selecione a operação' }]}
+            extra="A operação de delivery a que este restaurante pertence (geralmente LivraisonTotale)."
           >
             <Select
-              placeholder="Selecione o negócio..."
+              placeholder="Selecione..."
               options={(businesses as Business[]).map(b => ({
                 value: b._id,
-                label: `${b.name} ${b.instances?.length ? `(${b.instances.join(', ')})` : '(sem instâncias)'}`,
+                label: b.instances?.length ? b.name : `${b.name}  —  ⚠️ WhatsApp não conectado`,
               }))}
               onChange={v => setSelectedBizId(v)}
               showSearch
@@ -200,15 +210,15 @@ function RestaurantsTab() {
 
           <Form.Item
             name="commandJid"
-            label="Destino de Comandos (grupo OU contato individual)"
-            rules={[{ required: true, message: 'Selecione o destino' }]}
-            extra="Pode ser um grupo do restaurante ou o WhatsApp pessoal do dono."
+            label="Onde o restaurante envia os pedidos"
+            rules={[{ required: true, message: 'Selecione o grupo ou contato' }]}
+            extra="Pode ser o grupo do restaurante no WhatsApp ou o número pessoal do dono."
           >
             <JidSelect
               businessId={selectedBizId ?? ''}
               instance={formInstance}
               type="any"
-              placeholder={formInstance ? 'Buscar grupo ou contato...' : 'Selecione um negócio primeiro'}
+              placeholder={formInstance ? 'Buscar grupo ou contato...' : 'Selecione a operação primeiro'}
               onChange={(jid, opt) => {
                 form.setFieldsValue({ commandJid: jid, commandIsGroup: !!opt?.isGroup });
               }}
@@ -218,20 +228,21 @@ function RestaurantsTab() {
 
           <Form.Item
             name="delivererGroupJid"
-            label="Grupo de Entregadores"
-            rules={[{ required: true, message: 'Selecione o grupo dos entregadores' }]}
+            label="Grupo dos entregadores que atendem esse restaurante"
+            rules={[{ required: true, message: 'Selecione o grupo' }]}
+            extra="O agente vai postar os pedidos confirmados nesse grupo para os entregadores se manifestarem."
           >
             <JidSelect
               businessId={selectedBizId ?? ''}
               instance={formInstance}
               type="group"
-              placeholder={formInstance ? 'Buscar grupo...' : 'Selecione um negócio primeiro'}
+              placeholder={formInstance ? 'Buscar grupo...' : 'Selecione a operação primeiro'}
               onChange={jid => form.setFieldsValue({ delivererGroupJid: jid })}
             />
           </Form.Item>
 
           {editing && (
-            <Form.Item name="active" label="Ativo" valuePropName="checked">
+            <Form.Item name="active" label="Restaurante ativo" valuePropName="checked" extra="Desativados não aparecem para o agente.">
               <Switch />
             </Form.Item>
           )}
@@ -756,19 +767,48 @@ function PersonasTab() {
 
 // ── Página principal ──────────────────────────────────────────────────────────
 
+function DeliveryStatusBanner() {
+  const { data: businesses = [] } = useQuery({ queryKey: ['businesses'], queryFn: api.getBusinesses });
+  const lt = (businesses as Business[]).find(b => b.name === 'LivraisonTotale');
+  if (!lt) return null;
+  const hasInstance = !!lt.instances?.length;
+  if (hasInstance) return null;
+  return (
+    <div style={{ background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 6, padding: '10px 16px', marginBottom: 16 }}>
+      <Text>
+        ⚠️ A operação <Text strong>LivraisonTotale</Text> ainda não tem WhatsApp conectado.
+        Vá em <Text strong>Negócios → LivraisonTotale → Conectar WhatsApp</Text> para escanear o QR code.
+        Sem isso, não é possível selecionar grupos e contatos nos restaurantes.
+      </Text>
+    </div>
+  );
+}
+
 export default function Delivery() {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const items = [
+    { key: 'orders',      label: 'Pedidos',       children: <OrdersTab /> },
+    { key: 'restaurants', label: 'Restaurantes',  children: <RestaurantsTab /> },
+    { key: 'settlements', label: 'Acertos',       children: <SettlementsTab /> },
+  ];
+  if (showAdvanced) {
+    items.push({ key: 'personas', label: '⚙️ Personas (avançado)', children: <PersonasTab /> });
+  }
   return (
     <div>
-      <Title level={3}>🛵 Delivery</Title>
-      <Tabs
-        defaultActiveKey="restaurants"
-        items={[
-          { key: 'restaurants', label: 'Restaurantes',  children: <RestaurantsTab /> },
-          { key: 'orders',      label: 'Pedidos',       children: <OrdersTab /> },
-          { key: 'settlements', label: 'Acertos',       children: <SettlementsTab /> },
-          { key: 'personas',    label: 'Personas',      children: <PersonasTab /> },
-        ]}
-      />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <Title level={3} style={{ margin: 0 }}>🛵 Delivery</Title>
+        <Button
+          size="small"
+          type={showAdvanced ? 'primary' : 'default'}
+          ghost={showAdvanced}
+          onClick={() => setShowAdvanced(v => !v)}
+        >
+          {showAdvanced ? 'Ocultar avançado' : 'Modo avançado'}
+        </Button>
+      </div>
+      <DeliveryStatusBanner />
+      <Tabs defaultActiveKey="orders" items={items} />
     </div>
   );
 }
