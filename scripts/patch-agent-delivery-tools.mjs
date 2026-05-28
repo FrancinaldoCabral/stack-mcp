@@ -327,19 +327,23 @@ async function main() {
 
   // 3b. Garantir que o snippet do openRouterBody está presente e atualizado (idempotente)
   const BODY_MARKER = '/* delivery-openrouter-body */';
+  const MESSAGES_DECL = `const messages = [\n  { role: 'system', content: sistemaPromptFinal },\n  ...historico.slice(-100),\n  { role: 'user', content: userContent },\n];\n`;
   let code2 = construir.parameters.jsCode;
-  // remove versão antiga (entre marker e a próxima linha 'const respondWithAudio')
+  // remove versão antiga (entre marker e o return final)
   if (code2.includes(BODY_MARKER)) {
     const startIdx = code2.indexOf(BODY_MARKER);
-    const endIdx = code2.indexOf('const messages = [', startIdx);
+    const endIdx = code2.indexOf('return [{', startIdx);
     if (endIdx > startIdx) {
       code2 = code2.slice(0, startIdx) + code2.slice(endIdx);
     }
   }
-  // injeta antes de 'const messages = ['
-  const msgAnchor = 'const messages = [';
+  // Garante const messages = [...] (pode ter sido removido em re-run anterior)
+  if (!/const\s+messages\s*=\s*\[/.test(code2)) {
+    code2 = code2.replace('return [{', MESSAGES_DECL + '\nreturn [{');
+  }
+  // Injeta snippet ANTES do return (e DEPOIS de messages, que já existe agora)
   if (!code2.includes(BODY_MARKER)) {
-    code2 = code2.replace(msgAnchor, OPENROUTER_BODY_SNIPPET + '\n' + msgAnchor);
+    code2 = code2.replace('return [{', OPENROUTER_BODY_SNIPPET + '\nreturn [{');
   }
   // Atualiza o return final para que use __openRouterBody/__model SEMPRE (mesmo em re-runs)
   code2 = code2.replace(
