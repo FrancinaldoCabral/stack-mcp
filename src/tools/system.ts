@@ -133,6 +133,44 @@ async function deleteRedisKeysByPattern(pattern: string): Promise<number> {
   return deleted;
 }
 
+/** Deleta pontos do Qdrant por filtro (ou todos, se filter=null). */
+async function deleteQdrantPoints(collection: string, filter: Record<string, unknown> | null): Promise<{ deleted: number; error?: string }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.qdrant.apiKey) headers['api-key'] = config.qdrant.apiKey;
+  const base = config.qdrant.url.replace(/\/$/, '');
+
+  // Verifica se a coleção existe
+  const infoRes = await fetch(`${base}/collections/${collection}`, { headers });
+  if (!infoRes.ok) {
+    return { deleted: 0, error: `coleção ${collection} inexistente (status ${infoRes.status})` };
+  }
+
+  // Conta pontos antes
+  const countRes = await fetch(`${base}/collections/${collection}/points/count`, {
+    method: 'POST', headers, body: JSON.stringify({ exact: true, ...(filter ? { filter } : {}) }),
+  });
+  let before = 0;
+  if (countRes.ok) {
+    const j = await countRes.json() as { result?: { count?: number } };
+    before = j.result?.count ?? 0;
+  }
+  if (before === 0) return { deleted: 0 };
+
+  // Delete: se filter nulo, usa filter "match all" via must_not vazio (idiom Qdrant)
+  const body = filter
+    ? { filter }
+    : { filter: { must_not: [{ key: '___never___', match: { value: '___never___' } }] } };
+
+  const delRes = await fetch(`${base}/collections/${collection}/points/delete`, {
+    method: 'POST', headers, body: JSON.stringify(body),
+  });
+  if (!delRes.ok) {
+    const txt = await delRes.text();
+    return { deleted: 0, error: `delete falhou: ${delRes.status} ${txt.slice(0, 120)}` };
+  }
+  return { deleted: before };
+}
+
 // ── Definições de ferramentas ────────────────────────────────────────────────
 
 export const systemTools: Tool[] = [
@@ -159,8 +197,9 @@ export const systemTools: Tool[] = [
   {
     name: 'system_clear_all_conversations',
     description:
-      'APAGA TUDO: mensagens + conversas + contatos do Chatwoot, chaves Redis (sessao/buffer/debounce/human_takeover), e collections MongoDB conversations e customers. ' +
-      'Preserva cadastros (businesses, agentes, personas, restaurantes de delivery). Operação irreversível.',
+      'APAGA TUDO: mensagens + conversas + contatos do Chatwoot, chaves Redis (sessao/buffer/debounce/human_takeover), ' +
+      'collections MongoDB conversations/customers/delivery_orders/delivery_settlements, e memória vetorial (Qdrant vendly_intelligence). ' +
+      'Preserva cadastros (businesses, agentes, personas, restaurantes de delivery, knowledge base curada). Operação irreversível.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -219,10 +258,23 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
 
       results.push(`✅ Redis: ${redisDeleted} chaves deletadas`);
 
-      // 3. MongoDB — conversas do telefone
+      // 3. MongoDB — conversas + pedidos + acertos do telefone
       const db = await getDb();
       const mongoResult = await db.collection('conversations').deleteMany({ phone });
-      results.push(`✅ MongoDB: ${mongoResult.deletedCount} documentos deletados`);
+      const ordResult = await db.collection('delivery_orders').deleteMany({ clientPhone: phone }).catch(() => ({ deletedCount: 0 }));
+      const settResult = await db.collection('delivery_settlements').deleteMany({ clientPhone: phone }).catch(() => ({ deletedCount: 0 }));
+      results.push(
+        `✅ MongoDB: ${mongoResult.deletedCount} conversas, ${ordResult.deletedCount} pedidos, ${settResult.deletedCount} acertos deletados`
+      );
+
+      // 4. Qdrant — memória vetorial do atendente filtrada por telefone
+      const qFilter = { must: [{ key: 'phone', match: { value: phone } }] };
+      const qdrantRes = await deleteQdrantPoints('vendly_intelligence', qFilter);
+      if (qdrantRes.error) {
+        results.push(`⚠️ Qdrant: ${qdrantRes.error}`);
+      } else {
+        results.push(`✅ Qdrant: ${qdrantRes.deleted} blocos de memória do atendente apagados`);
+      }
 
       return results.join('\n');
     }
@@ -253,11 +305,25 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
       }
       summary.push(`✅ Redis: ${redisDeleted} chaves deletadas`);
 
-      // 3. MongoDB — limpar collections de histórico de conversa (preserva businesses, agentes, restaurantes)
+      // 3. MongoDB — limpar histórico de conversa + pedidos + acertos (preserva businesses, agentes, restaurantes, knowledge)
       const db = await getDb();
       const convDel = await db.collection('conversations').deleteMany({});
       const custDel = await db.collection('customers').deleteMany({}).catch(() => ({ deletedCount: 0 }));
-      summary.push(`✅ MongoDB: ${convDel.deletedCount} conversas + ${custDel.deletedCount} customers deletados (businesses/agentes/restaurantes preservados)`);
+      const ordDel  = await db.collection('delivery_orders').deleteMany({}).catch(() => ({ deletedCount: 0 }));
+      const settDel = await db.collection('delivery_settlements').deleteMany({}).catch(() => ({ deletedCount: 0 }));
+      summary.push(
+        `✅ MongoDB: ${convDel.deletedCount} conversas, ${custDel.deletedCount} customers, ` +
+        `${ordDel.deletedCount} pedidos, ${settDel.deletedCount} acertos deletados ` +
+        `(businesses/agentes/restaurantes/knowledge preservados)`
+      );
+
+      // 4. Qdrant — memória vetorial do atendente (vendly_intelligence)
+      const qdrantRes = await deleteQdrantPoints('vendly_intelligence', null);
+      if (qdrantRes.error) {
+        summary.push(`⚠️ Qdrant: ${qdrantRes.error}`);
+      } else {
+        summary.push(`✅ Qdrant: ${qdrantRes.deleted} blocos de memória do atendente apagados`);
+      }
 
       return summary.join('\n');
     }
