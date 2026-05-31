@@ -71,6 +71,50 @@ async function listAllChatwootConversationIds(http: ReturnType<typeof chatwootHt
   return ids;
 }
 
+/** Tenta deletar uma conversa do Chatwoot. Retorna true se sucesso. */
+async function deleteConversation(http: ReturnType<typeof chatwootHttp>, convId: number): Promise<boolean> {
+  try {
+    await safeRequest(() =>
+      http.delete(`/api/v1/accounts/${accountId()}/conversations/${convId}`).then(r => r.data)
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Lista todos os IDs de contatos do Chatwoot (com paginação). */
+async function listAllChatwootContactIds(http: ReturnType<typeof chatwootHttp>): Promise<number[]> {
+  const ids = new Set<number>();
+  let page = 1;
+
+  while (true) {
+    const res = await safeRequest(() =>
+      http.get(`/api/v1/accounts/${accountId()}/contacts`, { params: { page } }).then(r => r.data)
+    );
+    const data = (res as { payload?: unknown[] })?.payload ?? [];
+    if (!Array.isArray(data) || data.length === 0) break;
+    data.forEach((c: unknown) => ids.add((c as { id: number }).id));
+    if (data.length < 15) break;
+    page++;
+    if (page > 500) break; // sanity
+  }
+
+  return [...ids];
+}
+
+/** Deleta um contato do Chatwoot (cascateia conversas associadas). */
+async function deleteContact(http: ReturnType<typeof chatwootHttp>, contactId: number): Promise<boolean> {
+  try {
+    await safeRequest(() =>
+      http.delete(`/api/v1/accounts/${accountId()}/contacts/${contactId}`).then(r => r.data)
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Deleta chaves Redis por prefixos do sistema de conversas. */
 async function deleteRedisKeysByPattern(pattern: string): Promise<number> {
   const redis = getRedis();
@@ -115,8 +159,8 @@ export const systemTools: Tool[] = [
   {
     name: 'system_clear_all_conversations',
     description:
-      'APAGA TUDO: todas as mensagens de todas as conversas no Chatwoot, todas as chaves Redis de sessão/buffer/debounce/human_takeover, e todos os documentos da collection conversations no MongoDB. ' +
-      'Operação irreversível.',
+      'APAGA TUDO: mensagens + conversas + contatos do Chatwoot, chaves Redis (sessao/buffer/debounce/human_takeover), e collections MongoDB conversations e customers. ' +
+      'Preserva cadastros (businesses, agentes, personas, restaurantes de delivery). Operação irreversível.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -141,6 +185,8 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
       );
       const contacts: unknown[] = (searchRes as { payload?: unknown[] })?.payload ?? [];
       let chatwootDeletedMsgs = 0;
+      let chatwootDeletedConvs = 0;
+      let chatwootDeletedContacts = 0;
 
       for (const contact of contacts) {
         const contactId = (contact as { id: number }).id;
@@ -152,10 +198,13 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
         for (const conv of convs) {
           const convId = (conv as { id: number }).id;
           chatwootDeletedMsgs += await deleteAllMessages(http, convId);
+          if (await deleteConversation(http, convId)) chatwootDeletedConvs++;
         }
+        // Apaga o próprio contato (cascateia o que sobrou)
+        if (await deleteContact(http, contactId)) chatwootDeletedContacts++;
       }
 
-      results.push(`✅ Chatwoot: ${chatwootDeletedMsgs} mensagens deletadas`);
+      results.push(`✅ Chatwoot: ${chatwootDeletedMsgs} mensagens, ${chatwootDeletedConvs} conversas, ${chatwootDeletedContacts} contatos deletados`);
 
       // 2. Limpar Redis — chaves com padrão *:phone* (ambos formatos de JID)
       const instanceFilter = args.instance ? String(args.instance) : '*';
@@ -182,13 +231,20 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
       const http = chatwootHttp();
       const summary: string[] = [];
 
-      // 1. Chatwoot — apagar mensagens de todas as conversas
+      // 1. Chatwoot — apagar mensagens + conversas + contatos
       const convIds = await listAllChatwootConversationIds(http);
       let totalMsgs = 0;
+      let convsDeleted = 0;
       for (const convId of convIds) {
         totalMsgs += await deleteAllMessages(http, convId);
+        if (await deleteConversation(http, convId)) convsDeleted++;
       }
-      summary.push(`✅ Chatwoot: ${totalMsgs} mensagens deletadas em ${convIds.length} conversas`);
+      const contactIds = await listAllChatwootContactIds(http);
+      let contactsDeleted = 0;
+      for (const contactId of contactIds) {
+        if (await deleteContact(http, contactId)) contactsDeleted++;
+      }
+      summary.push(`✅ Chatwoot: ${totalMsgs} mensagens, ${convsDeleted}/${convIds.length} conversas, ${contactsDeleted}/${contactIds.length} contatos deletados`);
 
       // 2. Redis — apagar todas as chaves de conversas
       let redisDeleted = 0;
@@ -197,10 +253,11 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
       }
       summary.push(`✅ Redis: ${redisDeleted} chaves deletadas`);
 
-      // 3. MongoDB — limpar collection conversations
+      // 3. MongoDB — limpar collections de histórico de conversa (preserva businesses, agentes, restaurantes)
       const db = await getDb();
-      const mongoResult = await db.collection('conversations').deleteMany({});
-      summary.push(`✅ MongoDB: ${mongoResult.deletedCount} documentos deletados`);
+      const convDel = await db.collection('conversations').deleteMany({});
+      const custDel = await db.collection('customers').deleteMany({}).catch(() => ({ deletedCount: 0 }));
+      summary.push(`✅ MongoDB: ${convDel.deletedCount} conversas + ${custDel.deletedCount} customers deletados (businesses/agentes/restaurantes preservados)`);
 
       return summary.join('\n');
     }

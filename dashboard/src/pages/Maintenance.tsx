@@ -65,7 +65,7 @@ export default function Maintenance() {
         style={{ marginBottom: 24 }}
       >
         <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          Apaga todas as mensagens do Chatwoot, chaves Redis (sessão, buffer, debounce, human_takeover) e documentos MongoDB para um número específico.
+          Apaga as mensagens, a(s) conversa(s) e o próprio contato no Chatwoot, chaves Redis (sessão, buffer, debounce, human_takeover) e documentos MongoDB para um número específico.
         </Paragraph>
 
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -146,8 +146,8 @@ export default function Maintenance() {
           type="warning"
           showIcon
           icon={<WarningOutlined />}
-          message="Operação irreversível"
-          description="Apaga TODAS as mensagens de TODAS as conversas no Chatwoot, todos os dados de sessão no Redis (sessao:*, buffer:*, debounce_ts:*, human_takeover:*) e toda a collection conversations no MongoDB."
+          message="Operação irreversível — inicia o sistema do zero"
+          description="Apaga TUDO relacionado a conversas: mensagens + conversas + contatos do Chatwoot, chaves Redis (sessao:*, buffer:*, debounce_ts:*, human_takeover:*) e collections MongoDB conversations e customers. Preserva cadastros: negócios, agentes, personas e restaurantes de delivery."
           style={{ marginBottom: 16 }}
         />
 
