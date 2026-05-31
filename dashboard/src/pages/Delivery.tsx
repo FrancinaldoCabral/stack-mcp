@@ -264,9 +264,13 @@ function RestaurantsTab() {
 // ── Pedidos ───────────────────────────────────────────────────────────────────
 
 function OrdersTab() {
+  const qc = useQueryClient();
   const [restaurantId, setRestaurantId] = useState('');
   const [status, setStatus] = useState('');
   const [days, setDays] = useState('30');
+  const [viewing, setViewing] = useState<DeliveryOrder | null>(null);
+  const [editing, setEditing] = useState<DeliveryOrder | null>(null);
+  const [form] = Form.useForm();
 
   const { data: restaurants = [] } = useQuery({
     queryKey: ['delivery-restaurants'],
@@ -283,6 +287,48 @@ function OrdersTab() {
   });
 
   const orders: DeliveryOrder[] = data?.data ?? [];
+
+  const update = useMutation({
+    mutationFn: (vals: Partial<DeliveryOrder>) => api.updateDeliveryOrder(editing!._id, vals),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['delivery-orders'] });
+      setEditing(null);
+      form.resetFields();
+      message.success('Pedido atualizado!');
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.deleteDeliveryOrder(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['delivery-orders'] });
+      message.success('Pedido removido.');
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const openEdit = (o: DeliveryOrder) => {
+    form.setFieldsValue({
+      restaurantId: o.restaurantId,
+      clientName: o.clientName ?? '',
+      clientAddress: o.clientAddress ?? '',
+      clientPhone: o.clientPhone ?? '',
+      items: o.items ?? '',
+      value: o.value ?? null,
+      delivererName: o.delivererName ?? '',
+      delivererJid: o.delivererJid ?? '',
+      status: o.status,
+      settlement: o.settlement ?? 'pendente',
+    });
+    setEditing(o);
+  };
+
+  const submitEdit = () => form.validateFields().then(vals => {
+    const restaurant = (restaurants as DeliveryRestaurant[]).find(r => r._id === vals.restaurantId);
+    if (restaurant) vals.restaurantName = restaurant.name;
+    update.mutate(vals);
+  });
 
   const cols = [
     {
@@ -316,6 +362,25 @@ function OrdersTab() {
     {
       title: 'Data', dataIndex: 'createdAt', key: 'date',
       render: (d: string) => d ? dayjs(d).format('DD/MM HH:mm') : '—',
+    },
+    {
+      title: 'Ações', key: 'actions', width: 170, fixed: 'right' as const,
+      render: (_: unknown, o: DeliveryOrder) => (
+        <Space size="small">
+          <Button size="small" onClick={() => setViewing(o)}>Ver</Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(o)} />
+          <Popconfirm
+            title="Remover este pedido?"
+            description="Esta ação não pode ser desfeita."
+            okText="Sim, remover"
+            cancelText="Cancelar"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => remove.mutate(o._id)}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      ),
     },
   ];
 
@@ -353,9 +418,89 @@ function OrdersTab() {
         columns={cols}
         loading={isLoading}
         size="small"
-        scroll={{ x: 900 }}
+        scroll={{ x: 1100 }}
         pagination={{ pageSize: 50 }}
       />
+
+      {/* Modal de visualização */}
+      <Modal
+        title={viewing ? `Pedido${viewing.orderNumber ? ` #${viewing.orderNumber}` : ''}` : ''}
+        open={!!viewing}
+        onCancel={() => setViewing(null)}
+        footer={[
+          <Button key="close" onClick={() => setViewing(null)}>Fechar</Button>,
+          viewing && (
+            <Button key="edit" type="primary" icon={<EditOutlined />} onClick={() => { openEdit(viewing); setViewing(null); }}>
+              Editar
+            </Button>
+          ),
+        ]}
+        width={560}
+      >
+        {viewing && (
+          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px 12px', marginTop: 12 }}>
+            <Text type="secondary">Restaurante:</Text><Text>{viewing.restaurantName}</Text>
+            <Text type="secondary">Cliente:</Text><Text>{viewing.clientName ?? '—'}</Text>
+            <Text type="secondary">Telefone:</Text><Text>{viewing.clientPhone ?? '—'}</Text>
+            <Text type="secondary">Endereço:</Text><Text>{viewing.clientAddress ?? '—'}</Text>
+            <Text type="secondary">Itens:</Text><Text>{viewing.items ?? '—'}</Text>
+            <Text type="secondary">Valor:</Text><Text>{viewing.value != null ? `R$ ${Number(viewing.value).toFixed(2)}` : '—'}</Text>
+            <Text type="secondary">Entregador:</Text><Text>{viewing.delivererName ?? '—'}</Text>
+            <Text type="secondary">JID entregador:</Text><Text code style={{ fontSize: 11 }}>{viewing.delivererJid ?? '—'}</Text>
+            <Text type="secondary">Status:</Text>
+            <span><Tag color={(ORDER_STATUS[viewing.status] ?? { color: 'default' }).color}>{(ORDER_STATUS[viewing.status] ?? { label: viewing.status }).label}</Tag></span>
+            <Text type="secondary">Acerto:</Text><Text>{viewing.settlement ?? 'pendente'}</Text>
+            <Text type="secondary">Criado em:</Text><Text>{viewing.createdAt ? dayjs(viewing.createdAt).format('DD/MM/YYYY HH:mm') : '—'}</Text>
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal de edição */}
+      <Modal
+        title={editing ? `Editar pedido${editing.orderNumber ? ` #${editing.orderNumber}` : ''}` : ''}
+        open={!!editing}
+        onOk={submitEdit}
+        onCancel={() => { setEditing(null); form.resetFields(); }}
+        okText="Salvar"
+        confirmLoading={update.isPending}
+        width={620}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+          <Form.Item name="restaurantId" label="Restaurante" rules={[{ required: true }]}>
+            <Select
+              showSearch
+              options={(restaurants as DeliveryRestaurant[]).map(r => ({ value: r._id, label: r.name }))}
+              filterOption={(input, opt) => String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+            />
+          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="clientName" label="Nome do cliente"><Input /></Form.Item>
+            <Form.Item name="clientPhone" label="Telefone"><Input /></Form.Item>
+          </div>
+          <Form.Item name="clientAddress" label="Endereço"><Input /></Form.Item>
+          <Form.Item name="items" label="Itens"><Input.TextArea rows={2} /></Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="value" label="Valor (R$)">
+              <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="delivererName" label="Entregador"><Input /></Form.Item>
+          </div>
+          <Form.Item name="delivererJid" label="JID do entregador" extra="ex: 5511999999999@s.whatsapp.net"><Input /></Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="status" label="Status" rules={[{ required: true }]}>
+              <Select options={Object.entries(ORDER_STATUS).map(([k, v]) => ({ value: k, label: v.label }))} />
+            </Form.Item>
+            <Form.Item name="settlement" label="Acerto">
+              <Select options={[
+                { value: 'pendente', label: 'Pendente' },
+                { value: 'acertado', label: 'Acertado' },
+                { value: 'sem_acertar', label: 'Sem Acertar' },
+              ]} />
+            </Form.Item>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 }

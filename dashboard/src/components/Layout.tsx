@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Layout as AntLayout, Menu, Button, Input, Modal, Typography } from 'antd';
 import {
-  DashboardOutlined,
   ShopOutlined,
   ToolOutlined,
   KeyOutlined,
@@ -16,9 +15,8 @@ const { Header, Sider, Content } = AntLayout;
 const { Text } = Typography;
 
 const menuItems = [
-  { key: '/', icon: <DashboardOutlined />, label: 'Visão Geral' },
-  { key: '/businesses', icon: <ShopOutlined />, label: 'Negócios' },
   { key: '/delivery', icon: <CarOutlined />, label: 'Delivery' },
+  { key: '/businesses', icon: <ShopOutlined />, label: 'Negócios' },
   { key: '/maintenance', icon: <ToolOutlined />, label: 'Manutenção' },
 ];
 

@@ -183,6 +183,16 @@ deliveryRouter.put('/orders/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+// DELETE /api/delivery/orders/:id — remoção manual de pedido pela UI
+deliveryRouter.delete('/orders/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const result = await db.collection('delivery_orders').deleteOne({ _id: new ObjectId(req.params.id) });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 // ── Acertos ───────────────────────────────────────────────────────────────────
 
 deliveryRouter.get('/settlements', async (req, res) => {

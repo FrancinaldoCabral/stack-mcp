@@ -139,6 +139,8 @@ export const api = {
   },
   updateDeliveryOrder: (id: string, data: Partial<import('./types').DeliveryOrder>) =>
     req<import('./types').DeliveryOrder>(`/delivery/orders/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteDeliveryOrder: (id: string) =>
+    req<{ ok: boolean }>(`/delivery/orders/${id}`, { method: 'DELETE' }),
 
   getDeliverySettlements: (params?: Record<string, string>) => {
     const q = params ? '?' + new URLSearchParams(params).toString() : '';
