@@ -25,8 +25,22 @@ export interface Business {
   contactFilter?: ContactFilter;
   personas?: Persona[];
   contextRoutes?: ContextRoute[];
+  settings?: BusinessSettings;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DeliveryFeeBand {
+  minKm: number;
+  maxKm: number;
+  feeEur: number;
+}
+
+export interface BusinessSettings {
+  model?: string;
+  maxHistoryTokens?: number;
+  tools?: { searchMemory?: boolean };
+  deliveryFeeTable?: DeliveryFeeBand[];
 }
 
 export interface Persona {
@@ -111,6 +125,8 @@ export interface DeliveryRestaurant {
   /** Legado — mantido em sincronia com commandJid. */
   commandGroupJid: string;
   delivererGroupJid: string;
+  /** Endereço completo do restaurante (usado por delivery_calc_fee). */
+  address?: string;
   active: boolean;
   createdAt: string;
   updatedAt: string;

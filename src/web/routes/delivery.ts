@@ -26,6 +26,9 @@ function normalizeRestaurantInput(body: Record<string, unknown>) {
   if (body.delivererGroupJid !== undefined) {
     out.delivererGroupJid = String(body.delivererGroupJid ?? '').trim();
   }
+  if (body.address !== undefined) {
+    out.address = String(body.address ?? '').trim();
+  }
   return out;
 }
 
@@ -98,6 +101,7 @@ deliveryRouter.post('/restaurants', async (req, res) => {
       commandGroupJid: cmdJid,
       commandIsGroup: !!fields.commandIsGroup,
       delivererGroupJid: dlvJid,
+      address: (fields.address as string | undefined) ?? '',
       active: fields.active !== false,
       createdAt: now,
       updatedAt: now,

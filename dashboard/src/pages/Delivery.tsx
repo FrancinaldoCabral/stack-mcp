@@ -10,7 +10,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type {
   DeliveryRestaurant, DeliveryOrder, DeliverySettlement,
-  Business, Persona,
+  Business, Persona, DeliveryFeeBand,
 } from '../lib/types';
 import { JidSelect } from '../components/JidSelect';
 import dayjs from 'dayjs';
@@ -76,6 +76,7 @@ function RestaurantsTab() {
       commandJid: r.commandJid ?? r.commandGroupJid,
       commandIsGroup: r.commandIsGroup ?? (r.commandGroupJid?.endsWith('@g.us') ?? true),
       delivererGroupJid: r.delivererGroupJid,
+      address: r.address ?? '',
       active: r.active,
     });
     setEditing(r);
@@ -239,6 +240,14 @@ function RestaurantsTab() {
               placeholder={formInstance ? 'Buscar grupo...' : 'Selecione a operação primeiro'}
               onChange={jid => form.setFieldsValue({ delivererGroupJid: jid })}
             />
+          </Form.Item>
+
+          <Form.Item
+            name="address"
+            label="Endereço do restaurante (para cálculo de taxa de entrega)"
+            extra="Endereço completo: rua, número, cidade. Usado pela ferramenta delivery_calc_fee para calcular distância até o cliente."
+          >
+            <Input placeholder="Ex: Rue Antoine Dansaert 100, 1000 Bruxelles, Belgium" />
           </Form.Item>
 
           {editing && (
@@ -765,6 +774,129 @@ function PersonasTab() {
   );
 }
 
+// ── Tabela de preços (taxa de entrega por faixa de km) ───────────────────────
+
+function FeeTableTab() {
+  const qc = useQueryClient();
+  const { data: businesses = [] } = useQuery({ queryKey: ['businesses'], queryFn: api.getBusinesses });
+  const [businessId, setBusinessId] = useState<string | undefined>();
+  const [rows, setRows] = useState<DeliveryFeeBand[]>([]);
+  const [dirty, setDirty] = useState(false);
+
+  const biz = (businesses as Business[]).find(b => b._id === businessId);
+
+  // Carrega a tabela quando troca de negócio
+  useMemo(() => {
+    if (!biz) { setRows([]); setDirty(false); return; }
+    const t = biz.settings?.deliveryFeeTable ?? [];
+    setRows(t.map(b => ({ ...b })));
+    setDirty(false);
+  }, [biz?._id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = useMutation({
+    mutationFn: () => {
+      if (!biz) throw new Error('Selecione um negócio');
+      // valida bandas
+      for (const r of rows) {
+        if (r.minKm == null || r.maxKm == null || r.feeEur == null) throw new Error('Preencha todos os campos');
+        if (r.maxKm < r.minKm) throw new Error(`Faixa inválida: ${r.minKm}–${r.maxKm} km`);
+      }
+      return api.updateBusiness(biz._id, {
+        settings: { ...(biz.settings ?? {}), deliveryFeeTable: rows },
+      } as Partial<Business>);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['businesses'] });
+      setDirty(false);
+      message.success('Tabela salva!');
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const addRow = () => {
+    const last = rows[rows.length - 1];
+    const minKm = last ? Number((last.maxKm + 0.1).toFixed(1)) : 0;
+    setRows([...rows, { minKm, maxKm: minKm + 2, feeEur: 5 }]);
+    setDirty(true);
+  };
+  const updateRow = (idx: number, patch: Partial<DeliveryFeeBand>) => {
+    setRows(rows.map((r, i) => i === idx ? { ...r, ...patch } : r));
+    setDirty(true);
+  };
+  const removeRow = (idx: number) => {
+    setRows(rows.filter((_, i) => i !== idx));
+    setDirty(true);
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 12, padding: 12, background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6 }}>
+        <Text>
+          📍 Esta tabela é usada pela ferramenta <Text code>delivery_calc_fee</Text> que o agente chama para calcular a taxa de entrega
+          com base na distância (em km) entre o restaurante e o cliente. O endereço do restaurante é configurado em <Text strong>Restaurantes</Text>.
+        </Text>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+        <Text strong>Negócio:</Text>
+        <Select
+          style={{ minWidth: 280 }}
+          placeholder="Selecione um negócio"
+          value={businessId}
+          onChange={setBusinessId}
+          options={(businesses as Business[]).map(b => ({ value: b._id, label: b.name }))}
+        />
+      </div>
+
+      {biz && (
+        <>
+          <Table
+            dataSource={rows.map((r, i) => ({ ...r, key: i }))}
+            pagination={false}
+            size="small"
+            columns={[
+              {
+                title: 'De (km)', dataIndex: 'minKm', width: 140,
+                render: (_, _r, idx) => (
+                  <InputNumber min={0} step={0.1} value={rows[idx].minKm}
+                    onChange={v => updateRow(idx, { minKm: Number(v ?? 0) })} />
+                ),
+              },
+              {
+                title: 'Até (km)', dataIndex: 'maxKm', width: 140,
+                render: (_, _r, idx) => (
+                  <InputNumber min={0} step={0.1} value={rows[idx].maxKm}
+                    onChange={v => updateRow(idx, { maxKm: Number(v ?? 0) })} />
+                ),
+              },
+              {
+                title: 'Taxa (€)', dataIndex: 'feeEur', width: 140,
+                render: (_, _r, idx) => (
+                  <InputNumber min={0} step={0.5} value={rows[idx].feeEur}
+                    onChange={v => updateRow(idx, { feeEur: Number(v ?? 0) })} />
+                ),
+              },
+              {
+                title: '', width: 80,
+                render: (_, _r, idx) => (
+                  <Button danger size="small" onClick={() => removeRow(idx)}>Remover</Button>
+                ),
+              },
+            ]}
+          />
+          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+            <Button onClick={addRow}>+ Adicionar faixa</Button>
+            <Button type="primary" disabled={!dirty} loading={save.isPending} onClick={() => save.mutate()}>
+              Salvar tabela
+            </Button>
+            {dirty && <Text type="warning">Alterações não salvas</Text>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Página principal ──────────────────────────────────────────────────────────
 
 function DeliveryStatusBanner() {
@@ -790,6 +922,7 @@ export default function Delivery() {
     { key: 'orders',      label: 'Pedidos',       children: <OrdersTab /> },
     { key: 'restaurants', label: 'Restaurantes',  children: <RestaurantsTab /> },
     { key: 'settlements', label: 'Acertos',       children: <SettlementsTab /> },
+    { key: 'fees',        label: 'Tabela de preços', children: <FeeTableTab /> },
   ];
   if (showAdvanced) {
     items.push({ key: 'personas', label: '⚙️ Personas (avançado)', children: <PersonasTab /> });
