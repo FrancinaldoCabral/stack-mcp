@@ -105,7 +105,7 @@ Sua função padrão (quando não houver persona específica configurada para o 
 
 Se a conversa for de um grupo de comandos de restaurante ou de entregadores, você vai assumir uma persona específica configurada via personas. Se for de um cliente final ou contato avulso, responda como atendimento institucional.`,
   settings: {
-    model: 'google/gemini-2.5-flash-preview',
+    model: 'openai/gpt-4o-mini',
     maxHistoryTokens: 500_000,
     tools: { searchMemory: true },
   },
