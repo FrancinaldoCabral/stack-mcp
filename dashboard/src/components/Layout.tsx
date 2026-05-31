@@ -1,12 +1,18 @@
 import React, { useState } from 'react';
 import { Layout as AntLayout, Menu, Button, Input, Modal, Typography } from 'antd';
 import {
+  DashboardOutlined,
   ShopOutlined,
   ToolOutlined,
   KeyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   CarOutlined,
+  TeamOutlined,
+  EuroCircleOutlined,
+  WalletOutlined,
+  RobotOutlined,
+  WhatsAppOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getApiKey, setApiKey } from '../lib/api';
@@ -15,9 +21,15 @@ const { Header, Sider, Content } = AntLayout;
 const { Text } = Typography;
 
 const menuItems = [
-  { key: '/delivery', icon: <CarOutlined />, label: 'Delivery' },
-  { key: '/businesses', icon: <ShopOutlined />, label: 'Negócios' },
-  { key: '/maintenance', icon: <ToolOutlined />, label: 'Manutenção' },
+  { key: '/', icon: <DashboardOutlined />, label: 'Painel' },
+  { key: '/pedidos', icon: <CarOutlined />, label: 'Pedidos' },
+  { key: '/restaurantes', icon: <ShopOutlined />, label: 'Restaurantes' },
+  { key: '/precos', icon: <EuroCircleOutlined />, label: 'Taxas de entrega' },
+  { key: '/entregadores', icon: <TeamOutlined />, label: 'Entregadores' },
+  { key: '/acertos', icon: <WalletOutlined />, label: 'Acertos' },
+  { key: '/atendente', icon: <RobotOutlined />, label: 'Atendente virtual' },
+  { key: '/whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp' },
+  { key: '/manutencao', icon: <ToolOutlined />, label: 'Manutenção' },
 ];
 
 interface Props { children: React.ReactNode }

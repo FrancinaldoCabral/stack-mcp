@@ -42,7 +42,7 @@ const DAYS_OPTIONS = [
 
 // ── Restaurantes ──────────────────────────────────────────────────────────────
 
-function RestaurantsTab() {
+export function RestaurantsTab() {
   const qc = useQueryClient();
   const [form] = Form.useForm();
   const [editing, setEditing] = useState<DeliveryRestaurant | null>(null);
@@ -263,7 +263,7 @@ function RestaurantsTab() {
 
 // ── Pedidos ───────────────────────────────────────────────────────────────────
 
-function OrdersTab() {
+export function OrdersTab() {
   const qc = useQueryClient();
   const [restaurantId, setRestaurantId] = useState('');
   const [status, setStatus] = useState('');
@@ -507,7 +507,7 @@ function OrdersTab() {
 
 // ── Acertos ───────────────────────────────────────────────────────────────────
 
-function SettlementsTab() {
+export function SettlementsTab() {
   const qc = useQueryClient();
   const [delivererSearch, setDelivererSearch] = useState('');
   const [status, setStatus] = useState('');
@@ -921,7 +921,7 @@ function PersonasTab() {
 
 // ── Tabela de preços (taxa de entrega por faixa de km) ───────────────────────
 
-function FeeTableTab() {
+export function FeeTableTab() {
   const qc = useQueryClient();
   const { data: businesses = [] } = useQuery({ queryKey: ['businesses'], queryFn: api.getBusinesses });
   const [businessId, setBusinessId] = useState<string | undefined>();
@@ -1044,18 +1044,17 @@ function FeeTableTab() {
 
 // ── Página principal ──────────────────────────────────────────────────────────
 
-function DeliveryStatusBanner() {
+export function DeliveryStatusBanner() {
   const { data: businesses = [] } = useQuery({ queryKey: ['businesses'], queryFn: api.getBusinesses });
-  const lt = (businesses as Business[]).find(b => b.name === 'LivraisonTotale');
+  const lt = (businesses as Business[]).find(b => b.name === 'LivraisonTotale') ?? (businesses as Business[])[0];
   if (!lt) return null;
   const hasInstance = !!lt.instances?.length;
   if (hasInstance) return null;
   return (
     <div style={{ background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 6, padding: '10px 16px', marginBottom: 16 }}>
       <Text>
-        ⚠️ A operação <Text strong>LivraisonTotale</Text> ainda não tem WhatsApp conectado.
-        Vá em <Text strong>Negócios → LivraisonTotale → Conectar WhatsApp</Text> para escanear o QR code.
-        Sem isso, não é possível selecionar grupos e contatos nos restaurantes.
+        ⚠️ Seu WhatsApp ainda não está conectado.{' '}
+        Vá em <Text strong>WhatsApp</Text> no menu lateral para escanear o QR code.
       </Text>
     </div>
   );
