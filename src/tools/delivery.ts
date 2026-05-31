@@ -250,7 +250,43 @@ export const deliveryTools: Tool[] = [
       },
     },
   },
+  {
+    name: 'delivery_calc_fee',
+    description: 'Calcula a distância de rota (em km) do restaurante até o endereço do cliente e retorna a taxa de entrega segundo a tabela de preços configurada para o negócio (business.settings.deliveryFeeTable). Usa Nominatim (OSM) para geocoding e OSRM público para roteamento — sem necessidade de chave de API.',
+    inputSchema: {
+      type: 'object',
+      required: ['restaurantId', 'clientAddress'],
+      properties: {
+        restaurantId: { type: 'string', description: 'ID do restaurante de origem (delivery_restaurants._id)' },
+        clientAddress: { type: 'string', description: 'Endereço completo de entrega (rua, número, cidade)' },
+        originAddress: { type: 'string', description: 'Sobrepõe o endereço cadastrado do restaurante (opcional)' },
+      },
+    },
+  },
 ];
+
+// ── Geocoding + Routing (Nominatim + OSRM, ambos gratuitos sem chave) ────────
+async function geocode(address: string): Promise<{ lat: number; lon: number; display: string }> {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`;
+  const r = await fetch(url, { headers: { 'User-Agent': 'stack-mcp/1.0 (vendly delivery)' } });
+  if (!r.ok) throw new Error(`Nominatim ${r.status}`);
+  const data = await r.json() as Array<{ lat: string; lon: string; display_name: string }>;
+  if (!data?.[0]) throw new Error(`Endereço não encontrado: ${address}`);
+  return { lat: +data[0].lat, lon: +data[0].lon, display: data[0].display_name };
+}
+
+async function routeDistanceKm(
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+): Promise<number> {
+  const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`OSRM ${r.status}`);
+  const data = await r.json() as { routes?: Array<{ distance: number }> };
+  const meters = data?.routes?.[0]?.distance;
+  if (typeof meters !== 'number') throw new Error('OSRM não retornou rota');
+  return meters / 1000;
+}
 
 // ── Handler ──────────────────────────────────────────────────────────────────
 
@@ -431,6 +467,52 @@ export async function handleDeliveryTool(
       const instance = await getRestaurantInstance(r);
       const sent = await sendToJid(instance, jid, String(args.text));
       return json({ ok: true, sent });
+    }
+
+    case 'delivery_calc_fee': {
+      const restaurantId = String(args.restaurantId);
+      const clientAddress = String(args.clientAddress).trim();
+      if (!clientAddress) return json({ error: 'clientAddress vazio' });
+
+      const restaurant = await getRestaurant(restaurantId);
+      if (!restaurant) return json({ error: `Restaurante ${restaurantId} não encontrado` });
+
+      const originAddress = (args.originAddress ? String(args.originAddress) : (restaurant.address as string | undefined))?.trim();
+      if (!originAddress) {
+        return json({ error: `Restaurante "${restaurant.name}" não tem endereço cadastrado (campo 'address'). Informe originAddress ou cadastre o endereço no documento do restaurante.` });
+      }
+
+      // Geocoding + routing em paralelo (geocoding) depois rota
+      const [origin, dest] = await Promise.all([
+        geocode(originAddress),
+        geocode(clientAddress),
+      ]);
+      const distanceKm = await routeDistanceKm(origin, dest);
+
+      // Tabela de preços do negócio
+      const bizId = restaurant.businessId as string | undefined;
+      if (!bizId) return json({ error: 'Restaurante sem businessId' });
+      const db = await getDb();
+      const biz = await db.collection('businesses').findOne(
+        { _id: new ObjectId(bizId) },
+        { projection: { 'settings.deliveryFeeTable': 1 } },
+      );
+      const table = (biz?.settings?.deliveryFeeTable as Array<{ minKm: number; maxKm: number; feeEur: number }> | undefined) ?? [];
+      if (!table.length) {
+        return json({ error: 'Tabela de preços não configurada em business.settings.deliveryFeeTable' });
+      }
+
+      const band = table.find(b => distanceKm >= b.minKm && distanceKm <= b.maxKm);
+      return json({
+        restaurantName: restaurant.name,
+        originAddress,
+        clientAddress,
+        distanceKm: Math.round(distanceKm * 10) / 10,
+        feeEur: band?.feeEur ?? null,
+        band: band ? `${band.minKm}–${band.maxKm} km` : null,
+        outOfRange: !band,
+        maxKmTabela: Math.max(...table.map(b => b.maxKm)),
+      });
     }
 
     default:

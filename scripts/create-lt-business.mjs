@@ -31,6 +31,18 @@ const CAMPOS_PEDIDO = `
   • Código/comanda do pedido, se houver
   • Observações ou referências adicionais`;
 
+// TABELA_PRECOS_LT: faixa de distância (em km, da rota — não em linha reta) → taxa em €.
+// Esta tabela vive em business.settings.deliveryFeeTable e é consultada pela tool
+// delivery_calc_fee. Para alterar, edite aqui e rode o script — ou faça mongo_update direto.
+const TABELA_PRECOS_LT = [
+  { minKm: 0,  maxKm: 2.9,  feeEur: 6 },
+  { minKm: 3,  maxKm: 4.9,  feeEur: 8 },
+  { minKm: 5,  maxKm: 6.9,  feeEur: 10 },
+  { minKm: 7,  maxKm: 9.9,  feeEur: 12 },
+  { minKm: 10, maxKm: 12.9, feeEur: 15 },
+  { minKm: 13, maxKm: 15.9, feeEur: 20 },
+];
+
 // FORMATO_GRUPO_ENTREGADORES: template exato usado quando o pedido sobe pro grupo
 // dos entregadores via delivery_confirm_order. Mantenha a estrutura visual (emojis,
 // quebras de linha, separadores) — os entregadores estão acostumados com esse layout.
@@ -106,7 +118,9 @@ Algumas coisas você simplesmente não faz, porque sabe que dão problema: nunca
 
 Como você responde no WhatsApp: mensagens curtas, uma ideia por vez — EXCETO na hora da confirmação do pedido, que é sempre UMA mensagem com tudo. Emoji entra com moderação, só quando ajuda o tom (👀 ✅ 🛵 📦 ⏱️) — nada de exagero. Não usa saudações genéricas tipo "Olá! Como posso ajudar?". Você já está conversando, vai direto.
 
-Ferramentas que você tem disponíveis: delivery_draft_order, delivery_update_draft, delivery_confirm_order, delivery_create_order, delivery_update_order_status, delivery_list_orders, delivery_get_order, delivery_log_settlement, delivery_post_to_command_group, delivery_post_to_deliverer_group, delivery_list_restaurants, delivery_get_restaurant, search_memory.`,
+Ferramentas que você tem disponíveis: delivery_draft_order, delivery_update_draft, delivery_confirm_order, delivery_create_order, delivery_update_order_status, delivery_list_orders, delivery_get_order, delivery_log_settlement, delivery_post_to_command_group, delivery_post_to_deliverer_group, delivery_list_restaurants, delivery_get_restaurant, delivery_calc_fee, search_memory.
+
+CÁLCULO DE TAXA DE ENTREGA: sempre que o restaurante perguntar quanto vai sair a entrega pra um cliente, ou quando você precisar incluir a taxa no resumo do pedido, chame delivery_calc_fee passando o restaurantId (o restaurante atual desse grupo de comandos) e o clientAddress completo. A ferramenta retorna a distância de rota em km e a taxa em € segundo a tabela configurada. Nunca chute taxa de cabeça — sempre consulte. Se a ferramenta retornar outOfRange=true (cliente fora da área coberta), avise o restaurante: "esse endereço está a [X] km, fora da nossa área de cobertura (máximo [maxKmTabela] km) — vou precisar de uma autorização pra rodar isso".`,
   tools: [
     'delivery_draft_order',
     'delivery_update_draft',
@@ -120,6 +134,7 @@ Ferramentas que você tem disponíveis: delivery_draft_order, delivery_update_dr
     'delivery_post_to_deliverer_group',
     'delivery_list_restaurants',
     'delivery_get_restaurant',
+    'delivery_calc_fee',
     'search_memory',
   ],
 };
@@ -143,7 +158,7 @@ Algumas coisas você simplesmente não faz: nunca atribui um pedido a alguém se
 
 Como você responde no grupo: identifica a pessoa pelo nome real que veio na mensagem, sem inventar e sem usar genérico tipo "colega" ou "parceiro". Mensagens curtas, uma ação por vez, sem encadear 4 perguntas numa só. Emoji entra com moderação (🛵 ✅ 📦 ⏱️ 💰) só quando ajuda. Nada de saudação genérica — você já está no grupo o dia todo, vai direto ao ponto.
 
-Ferramentas disponíveis: delivery_update_order_status, delivery_assign_deliverer, delivery_list_orders, delivery_get_order, delivery_log_settlement, delivery_post_to_command_group, delivery_post_to_deliverer_group, delivery_list_restaurants, search_memory.`,
+Ferramentas disponíveis: delivery_update_order_status, delivery_assign_deliverer, delivery_list_orders, delivery_get_order, delivery_log_settlement, delivery_post_to_command_group, delivery_post_to_deliverer_group, delivery_list_restaurants, delivery_calc_fee, search_memory.`,
   tools: [
     'delivery_update_order_status',
     'delivery_assign_deliverer',
@@ -153,6 +168,7 @@ Ferramentas disponíveis: delivery_update_order_status, delivery_assign_delivere
     'delivery_post_to_command_group',
     'delivery_post_to_deliverer_group',
     'delivery_list_restaurants',
+    'delivery_calc_fee',
     'search_memory',
   ],
 };
@@ -171,6 +187,7 @@ Se a conversa for de um grupo de comandos de restaurante ou de entregadores, voc
     model: 'google/gemini-3.1-flash-lite',
     maxHistoryTokens: 500_000,
     tools: { searchMemory: true },
+    deliveryFeeTable: TABELA_PRECOS_LT,
   },
   personas: [personaRestaurant, personaDeliverer],
   contextRoutes: [], // ← preenchido automaticamente quando você cadastrar restaurantes no dashboard
