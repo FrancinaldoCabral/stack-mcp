@@ -115,6 +115,19 @@ async function deleteContact(http: ReturnType<typeof chatwootHttp>, contactId: n
   }
 }
 
+/** Executa op assíncrona em batches paralelos (concorrência limitada). */
+async function pMap<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const res = await Promise.allSettled(batch.map(fn));
+    for (const r of res) {
+      if (r.status === 'fulfilled') out.push(r.value);
+    }
+  }
+  return out;
+}
+
 /** Deleta chaves Redis por prefixos do sistema de conversas. */
 async function deleteRedisKeysByPattern(pattern: string): Promise<number> {
   const redis = getRedis();
@@ -231,30 +244,17 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
 
       const results: string[] = [];
 
-      // 1. Chatwoot
+      // 1. Chatwoot — apagar contatos (cascateia conversas+mensagens)
       try {
         const http = chatwootHttp();
         const searchRes = await safeRequest(() =>
           http.get(`/api/v1/accounts/${accountId()}/contacts/search`, { params: { q: phone, include_contacts: true } }).then(r => r.data)
         );
         const contacts: unknown[] = (searchRes as { payload?: unknown[] })?.payload ?? [];
-        let chatwootDeletedMsgs = 0;
-        let chatwootDeletedConvs = 0;
-        let chatwootDeletedContacts = 0;
-        for (const contact of contacts) {
-          const contactId = (contact as { id: number }).id;
-          const convsRes = await safeRequest(() =>
-            http.get(`/api/v1/accounts/${accountId()}/contacts/${contactId}/conversations`).then(r => r.data)
-          ).catch(() => ({}));
-          const convs: unknown[] = (convsRes as { payload?: unknown[] })?.payload ?? [];
-          for (const conv of convs) {
-            const convId = (conv as { id: number }).id;
-            chatwootDeletedMsgs += await deleteAllMessages(http, convId).catch(() => 0);
-            if (await deleteConversation(http, convId)) chatwootDeletedConvs++;
-          }
-          if (await deleteContact(http, contactId)) chatwootDeletedContacts++;
-        }
-        results.push(`✅ Chatwoot: ${chatwootDeletedMsgs} mensagens, ${chatwootDeletedConvs} conversas, ${chatwootDeletedContacts} contatos deletados`);
+        const ids = contacts.map(c => (c as { id: number }).id);
+        const delRes = await pMap(ids, 5, (id) => deleteContact(http, id));
+        const chatwootDeletedContacts = delRes.filter(Boolean).length;
+        results.push(`✅ Chatwoot: ${chatwootDeletedContacts}/${ids.length} contatos deletados (cascateia conversas+mensagens)`);
       } catch (e) {
         results.push(`⚠️ Chatwoot: falhou (${(e as Error)?.message ?? String(e)})`);
       }
@@ -302,22 +302,22 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
     case 'system_clear_all_conversations': {
       const summary: string[] = [];
 
-      // 1. Chatwoot — apagar mensagens + conversas + contatos
+      // 1. Chatwoot — apagar contatos em paralelo (cascateia conversas + mensagens)
+      //    Também varre conversas órfãs (sem contato), também em paralelo.
       try {
         const http = chatwootHttp();
-        const convIds = await listAllChatwootConversationIds(http);
-        let totalMsgs = 0;
-        let convsDeleted = 0;
-        for (const convId of convIds) {
-          totalMsgs += await deleteAllMessages(http, convId).catch(() => 0);
-          if (await deleteConversation(http, convId)) convsDeleted++;
-        }
         const contactIds = await listAllChatwootContactIds(http);
-        let contactsDeleted = 0;
-        for (const contactId of contactIds) {
-          if (await deleteContact(http, contactId)) contactsDeleted++;
-        }
-        summary.push(`✅ Chatwoot: ${totalMsgs} mensagens, ${convsDeleted}/${convIds.length} conversas, ${contactsDeleted}/${contactIds.length} contatos deletados`);
+        const contactsRes = await pMap(contactIds, 10, (id) => deleteContact(http, id));
+        const contactsDeleted = contactsRes.filter(Boolean).length;
+
+        const convIds = await listAllChatwootConversationIds(http);
+        const convsRes = await pMap(convIds, 10, (id) => deleteConversation(http, id));
+        const convsDeleted = convsRes.filter(Boolean).length;
+
+        summary.push(
+          `✅ Chatwoot: ${contactsDeleted}/${contactIds.length} contatos deletados ` +
+          `(cascateia conversas+mensagens), ${convsDeleted}/${convIds.length} conversas órfãs apagadas`
+        );
       } catch (e) {
         summary.push(`⚠️ Chatwoot: falhou (${(e as Error)?.message ?? String(e)})`);
       }
