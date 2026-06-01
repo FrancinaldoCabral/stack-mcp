@@ -3,7 +3,7 @@
 import 'dotenv/config';
 import { randomUUID } from 'crypto';
 
-const PROD = 'http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io';
+const PROD = 'https://app.vendly.chat';
 
 async function mcp(name, args) {
   const r = await fetch(`${PROD}/mcp`, {

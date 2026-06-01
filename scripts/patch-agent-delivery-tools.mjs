@@ -12,7 +12,7 @@ import axios from 'axios';
 const N8N_URL  = (process.env.N8N_URL || 'https://workflows.vendly.chat').replace(/\/$/, '');
 const API_KEY  = process.env.N8N_API_KEY;
 const WF_ID    = 'jleu4RPvSnYDL8Gd'; // [AGENT] Executor
-const MCP_URL  = process.env.MCP_URL || 'http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io/mcp';
+const MCP_URL  = process.env.MCP_URL || 'https://app.vendly.chat/mcp';
 
 if (!API_KEY) { console.error('N8N_API_KEY ausente'); process.exit(1); }
 

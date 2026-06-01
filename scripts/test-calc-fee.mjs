@@ -1,5 +1,5 @@
 // Aguarda deploy e testa delivery_calc_fee em prod
-const MCP = "http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io/mcp";
+const MCP = "https://app.vendly.chat/mcp";
 let id = 1;
 async function rpc(m, p) {
   const r = await fetch(MCP, {

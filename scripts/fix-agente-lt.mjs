@@ -1,7 +1,7 @@
 // Usa MCP em produção pra ler business LT e gravar agente:livraison-totale no Redis.
 import 'dotenv/config';
 
-const MCP = 'http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io/mcp';
+const MCP = 'https://app.vendly.chat/mcp';
 const INSTANCE = process.env.LT_INSTANCE || 'livraison-totale';
 
 let nextId = 1;

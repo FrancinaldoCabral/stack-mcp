@@ -17,7 +17,7 @@ const __deliveryCtx = (typeof $ === 'function' ? $('Resolver Persona').first()?.
 let __lastDraft = null;
 if (__deliveryCtx.restaurantId) {
   try {
-    const __mcpUrl = 'http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io/mcp';
+    const __mcpUrl = 'https://app.vendly.chat/mcp';
     const __r = await fetch(__mcpUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },

@@ -2,7 +2,7 @@
   "servers": {
     "stack-mcp": {
       "type": "http",
-      "url": "http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io/mcp"
+      "url": "https://app.vendly.chat/mcp"
     }
   }
 }

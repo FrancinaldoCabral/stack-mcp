@@ -35,7 +35,7 @@ N8N runtime ──► Serviços DIRETAMENTE (nós nativos, nunca via MCP)
 | Redis       | host interno Coolify (ver .env)              |
 | Qdrant      | URL sslip.io (ver .env)                      |
 | Coolify     | `https://coolify.redatudo.online`            |
-| MCP (prod)  | `http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io/mcp` |
+| MCP (prod)  | `https://app.vendly.chat/mcp` |
 
 Credenciais completas: arquivo `.env` na raiz (nunca comitar credenciais reais).
 

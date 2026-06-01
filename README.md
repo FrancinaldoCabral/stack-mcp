@@ -1,27 +1,27 @@
-﻿# stack-mcp — Vendly MCP Server
+# stack-mcp � Vendly MCP Server
 
-Servidor MCP (Model Context Protocol) em TypeScript para a plataforma **Vendly** — atendimento ao cliente via WhatsApp com IA.
+Servidor MCP (Model Context Protocol) em TypeScript para a plataforma **Vendly** � atendimento ao cliente via WhatsApp com IA.
 
-Expõe ferramentas para que agentes de IA (Claude, GPT, etc.) operem toda a infraestrutura da Vendly: enviar mensagens WhatsApp, criar workflows N8N, consultar MongoDB/Redis/Qdrant, gerenciar instâncias Evolution, Chatwoot e Coolify.
+Exp�e ferramentas para que agentes de IA (Claude, GPT, etc.) operem toda a infraestrutura da Vendly: enviar mensagens WhatsApp, criar workflows N8N, consultar MongoDB/Redis/Qdrant, gerenciar inst�ncias Evolution, Chatwoot e Coolify.
 
 ---
 
-## URLs dos serviços
+## URLs dos servi�os
 
-| Serviço    | URL                                          |
+| Servi�o    | URL                                          |
 |------------|----------------------------------------------|
 | Evolution  | `https://evolution.vendly.chat`              |
 | N8N        | `https://workflows.vendly.chat`              |
 | N8N API    | `https://workflows.vendly.chat/api/v1`       |
 | Chatwoot   | `https://chatwoot.vendly.chat`               |
 | Coolify    | `https://coolify.redatudo.online`            |
-| MCP (prod) | `http://fco8og80s4sw4c0wc0ogswws.157.173.111.65.sslip.io/mcp` |
+| MCP (prod) | `https://app.vendly.chat/mcp` |
 
 ---
 
 ## Ferramentas MCP
 
-| Serviço         | Ferramentas | Prefixo          |
+| Servi�o         | Ferramentas | Prefixo          |
 |-----------------|-------------|------------------|
 | Evolution API   | 10          | `evolution_`     |
 | N8N             | 9           | `n8n_`           |
@@ -36,7 +36,7 @@ Expõe ferramentas para que agentes de IA (Claude, GPT, etc.) operem toda a infr
 ## Build e deploy
 
 ```powershell
-# Build TypeScript → dist/
+# Build TypeScript ? dist/
 npm run build
 
 # Deploy: push para main, Coolify faz redeploy automatico
@@ -79,39 +79,39 @@ PORT=3000
 
 ```
 src/
-  config.ts        — le .env, exporta config tipado
-  index.ts         — servidor MCP, roteamento por prefixo
+  config.ts        � le .env, exporta config tipado
+  index.ts         � servidor MCP, roteamento por prefixo
   tools/
-    evolution.ts   — WhatsApp (Evolution API)
-    n8n.ts         — workflows e credenciais N8N
-    chatwoot.ts    — atendimento Chatwoot
-    mongodb.ts     — MongoDB
-    redis.ts       — Redis
-    qdrant.ts      — vetores Qdrant
-    coolify.ts     — deploy Coolify
+    evolution.ts   � WhatsApp (Evolution API)
+    n8n.ts         � workflows e credenciais N8N
+    chatwoot.ts    � atendimento Chatwoot
+    mongodb.ts     � MongoDB
+    redis.ts       � Redis
+    qdrant.ts      � vetores Qdrant
+    coolify.ts     � deploy Coolify
   utils/
-    http.ts        — axios client factory, safeRequest, toText
+    http.ts        � axios client factory, safeRequest, toText
 scripts/
-  setup-stack.mjs              — setup inicial de credenciais e workflows N8N
-  add-contact-filter-nodes.mjs — adiciona/atualiza nos de filtro de contatos
-  add-escalation-notifications.mjs — adiciona nos de notificacao de escalada
+  setup-stack.mjs              � setup inicial de credenciais e workflows N8N
+  add-contact-filter-nodes.mjs � adiciona/atualiza nos de filtro de contatos
+  add-escalation-notifications.mjs � adiciona nos de notificacao de escalada
 snapshots/
-  wf-entrada-v1.json    — snapshot do workflow [CORE] Entrada de Mensagem
-  wf-debounce-v1.json   — snapshot do workflow [CORE] Processar Buffer
-  wf-executor-v1.json   — snapshot do workflow [AGENT] Executor
+  wf-entrada-v1.json    � snapshot do workflow [CORE] Entrada de Mensagem
+  wf-debounce-v1.json   � snapshot do workflow [CORE] Processar Buffer
+  wf-executor-v1.json   � snapshot do workflow [AGENT] Executor
 ```
 
 ---
 
-## Arquitetura — regra critica
+## Arquitetura � regra critica
 
 ```
-Agente IA ──► MCP (stack-mcp) ──► Servicos (Evolution, N8N, Redis, MongoDB...)
-N8N runtime ──► Servicos DIRETAMENTE (nos nativos, nunca via MCP)
+Agente IA --? MCP (stack-mcp) --? Servicos (Evolution, N8N, Redis, MongoDB...)
+N8N runtime --? Servicos DIRETAMENTE (nos nativos, nunca via MCP)
 ```
 
 Workflows N8N usam nos nativos (`n8n-nodes-base.redis`, `n8n-nodes-base.httpRequest`).
-Nunca chamar a URL MCP dentro de nos N8N — N8N em nuvem nao acessa localhost.
+Nunca chamar a URL MCP dentro de nos N8N � N8N em nuvem nao acessa localhost.
 
 ---
 
@@ -128,20 +128,20 @@ Nunca chamar a URL MCP dentro de nos N8N — N8N em nuvem nao acessa localhost.
 ### Fluxo de mensagem
 
 ```
-Evolution API → Webhook /chatwoot-bot → [CORE] Entrada de Mensagem
-  → Normalizar Mensagem
-  → Redis GET Contact Filter → Aplicar Filtro Contatos   (bloqueia blacklist/whitelist)
-  → Redis GET human_takeover → Auto-Aceitar Conversa     (pula se humano assumiu)
-  → Redis GET Dedup → IF Ja Processado?
-  → PUSH Buffer → Setar Timestamp Debounce → Chamar Debounce
+Evolution API ? Webhook /chatwoot-bot ? [CORE] Entrada de Mensagem
+  ? Normalizar Mensagem
+  ? Redis GET Contact Filter ? Aplicar Filtro Contatos   (bloqueia blacklist/whitelist)
+  ? Redis GET human_takeover ? Auto-Aceitar Conversa     (pula se humano assumiu)
+  ? Redis GET Dedup ? IF Ja Processado?
+  ? PUSH Buffer ? Setar Timestamp Debounce ? Chamar Debounce
 
-→ [CORE] Processar Buffer (Debounce)
-  → aguarda 5s → Verificar timestamp → llen buffer
-  → POP Buffer (xN) → Consolidar → Chamar Executor
+? [CORE] Processar Buffer (Debounce)
+  ? aguarda 5s ? Verificar timestamp ? llen buffer
+  ? POP Buffer (xN) ? Consolidar ? Chamar Executor
 
-→ [AGENT] Executor
-  → Redis GET sessao → Construir Prompt → OpenRouter chat/completions
-  → Loop chunks → delay → Evolution sendText → Redis SET sessao
+? [AGENT] Executor
+  ? Redis GET sessao ? Construir Prompt ? OpenRouter chat/completions
+  ? Loop chunks ? delay ? Evolution sendText ? Redis SET sessao
 ```
 
 ---
