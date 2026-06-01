@@ -33,7 +33,7 @@ export const n8nTools = [
             required: ['name', 'nodes', 'connections'],
             properties: {
                 name: { type: 'string', description: 'Nome do workflow' },
-                nodes: { type: 'array', description: 'Array de nós do workflow' },
+                nodes: { type: 'array', items: { type: 'object' }, description: 'Array de nós do workflow' },
                 connections: { type: 'object', description: 'Objeto de conexões entre nós' },
                 active: { type: 'boolean', description: 'Ativar imediatamente (padrão false)' },
                 settings: { type: 'object', description: 'Configurações do workflow' },

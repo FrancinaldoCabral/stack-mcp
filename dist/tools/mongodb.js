@@ -70,7 +70,7 @@ export const mongodbTools = [
                 collection: { type: 'string' },
                 documents: {
                     description: 'Documento único ou array de documentos',
-                    oneOf: [{ type: 'object' }, { type: 'array' }],
+                    oneOf: [{ type: 'object' }, { type: 'array', items: { type: 'object' } }],
                 },
             },
         },
@@ -116,6 +116,7 @@ export const mongodbTools = [
                 collection: { type: 'string' },
                 pipeline: {
                     type: 'array',
+                    items: { type: 'object' },
                     description: 'Pipeline de agregação (ex: [{"$match": {}}, {"$group": {...}}])',
                 },
             },
