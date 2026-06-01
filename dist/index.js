@@ -279,8 +279,22 @@ async function main() {
                 clearTimeout(t2);
             }
         });
+        // REST direto de ferramentas (uso interno: N8N, scripts).
+        // Bypassa o protocolo MCP (sem session/initialize) — chama o handler direto.
+        // POST /tool/:name  body = arguments (objeto)
+        webApp.post('/tool/:name', async (req, res) => {
+            const name = req.params.name;
+            const args = (req.body ?? {});
+            try {
+                const text = await routeTool(name, args);
+                res.json({ ok: true, name, result: text });
+            }
+            catch (err) {
+                res.status(500).json({ ok: false, name, error: String(err) });
+            }
+        });
         // SPA fallback — serve index.html for all non-API routes
-        webApp.get(/^\/(?!api|mcp|health|util).*/, (_req, webRes) => {
+        webApp.get(/^\/(?!api|mcp|health|util|tool).*/, (_req, webRes) => {
             webRes.sendFile(path.join(publicDir, 'index.html'));
         });
         const httpServer = createServer(async (req, res) => {
