@@ -22,6 +22,12 @@ try {
   }
 } catch(e) {}
 const __draftLine = __lastDraft ? `\n- ÚLTIMO RASCUNHO (use este orderId em delivery_confirm_order / delivery_update_draft): orderId=${__lastDraft.orderId}, orderRef=${__lastDraft.orderRef}` : '';
+const __isLtGroup = (__deliveryCtx && (__deliveryCtx.personaKey === "restaurant" || __deliveryCtx.personaKey === "deliverer"));
+const __msgTimestamp = msg.timestamp ? Number(msg.timestamp) : null;
+const __msgTimeStr = __isLtGroup && __msgTimestamp
+  ? new Date(__msgTimestamp * 1000).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })
+  : null;
+const __msgTimeLine = __msgTimeStr ? `\n- [Horário da mensagem: ${__msgTimeStr}] — use ESTE horário como referência de tempo. NUNCA invente ou calcule horários.` : '';
 const __ctxBlock = __deliveryCtx.restaurantId ? `\n\n## Contexto Operacional\n- restaurantId: ${__deliveryCtx.restaurantId}\n- personaKey: ${__deliveryCtx.personaKey || ''}\n- Use este restaurantId em TODAS as chamadas de ferramenta delivery_*.${__draftLine}${__msgTimeLine}` : '';
 
 
@@ -55,15 +61,9 @@ Regras:
 - Responda apenas ao que foi perguntado
 - Quando o usu�rio enviar �udio ou pedir resposta em �udio, responda normalmente - o sistema faz a convers�o TTS automaticamente`;
 
-const audioSystemNote = '\n\n[Sistema - PRIORIDADE MAXIMA] Voce tem capacidade total de enviar audio: o TTS converte seu texto em audio automaticamente. NUNCA diga que nao consegue enviar audio. NUNCA use timestamps ou datas nas respostas.';
-const escalaSystemNote = '\n\n## Transfer�ncia para Atendimento Humano\nQuando o cliente solicitar explicitamente falar com um humano/atendente/pessoa, estiver muito frustrado, ou a situa��o exigir interven��o humana imediata: inclua [ESCALAR_HUMANO] no in�cio da sua resposta. Exemplo: "[ESCALAR_HUMANO] Claro! Vou te conectar com um atendente agora. Um momento! ??". O sistema faz a transfer�ncia automaticamente. Ap�s o marcador, escreva normalmente a mensagem para o cliente.';
-const __isLtGroup = (__deliveryCtx && (__deliveryCtx.personaKey === "restaurant" || __deliveryCtx.personaKey === "deliverer"));
-// Para grupos LT: injetar horário real da mensagem do WhatsApp no contexto operacional
-const __msgTimestamp = msg.timestamp ? Number(msg.timestamp) : null;
-const __msgTimeStr = __isLtGroup && __msgTimestamp
-  ? new Date(__msgTimestamp * 1000).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })
-  : null;
-const __msgTimeLine = __msgTimeStr ? `\n- [Horário da mensagem: ${__msgTimeStr}] — use ESTE horário como referência de tempo. NUNCA invente ou calcule horários.` : '';
+const audioSystemNote = '\n\n[Sistema - PRIORIDADE MAXIMA] Voce tem capacidade total de processar e enviar audio: o sistema transcreve o audio do usuario e o TTS converte sua resposta em audio automaticamente. NUNCA diga que nao consegue ouvir, entender, processar ou enviar audio. NUNCA use timestamps ou datas nas respostas.';
+const audioSystemNoteLt = '\n\n[Sistema - PRIORIDADE MAXIMA] Voce tem capacidade total de processar e enviar audio: o sistema transcreve o audio e o TTS converte sua resposta em audio automaticamente. NUNCA diga que nao consegue ouvir, entender, processar ou enviar audio.';
+const escalaSystemNote = '\n\n## Transferência para Atendimento Humano\nQuando o cliente solicitar explicitamente falar com um humano/atendente/pessoa, estiver muito frustrado, ou a situação exigir intervenção humana imediata: inclua [ESCALAR_HUMANO] no início da sua resposta. Exemplo: "[ESCALAR_HUMANO] Claro! Vou te conectar com um atendente agora. Um momento! ??". O sistema faz a transferência automaticamente. Após o marcador, escreva normalmente a mensagem para o cliente.';
 const sistemaPrompt = (customSystemPrompt || defaultPrompt) + __ctxBlock + customerCtx + intelligenceCtx + (__isLtGroup ? audioSystemNoteLt : audioSystemNote) + (__isLtGroup ? "" : escalaSystemNote);
 
 // Conte�do multimodal do usu�rio
