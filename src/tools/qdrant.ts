@@ -115,7 +115,7 @@ export const qdrantTools: Tool[] = [
       required: ['collection'],
       properties: {
         collection: { type: 'string' },
-        ids: { type: 'array', description: 'IDs dos pontos a remover' },
+        ids: { type: 'array', items: { type: 'object' }, description: 'IDs dos pontos a remover' },
         filter: { type: 'object', description: 'Filtro para remoção em lote' },
       },
     },
