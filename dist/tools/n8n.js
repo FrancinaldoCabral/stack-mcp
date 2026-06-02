@@ -49,7 +49,7 @@ export const n8nTools = [
             properties: {
                 id: { type: 'string', description: 'ID do workflow' },
                 name: { type: 'string' },
-                nodes: { type: 'array' },
+                nodes: { type: 'array', items: { type: 'object' } },
                 connections: { type: 'object' },
                 settings: { type: 'object' },
             },
