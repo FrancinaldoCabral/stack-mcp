@@ -56,6 +56,8 @@ function genOrderRef(): string {
 function formatOrderSummary(order: WithId<Document>): string {
   const lines: string[] = [];
   lines.push(`*Pedido ${order.orderRef ?? order._id}*`);
+  // Código externo de plataforma (iFood, Uber Eats, etc.) — se informado pelo restaurante
+  if (order.externalCode) lines.push(`Código: ${order.externalCode}`);
   if (order.clientName) lines.push(`Cliente: ${order.clientName}`);
   if (order.clientAddress) lines.push(`Endereço: ${order.clientAddress}`);
   if (order.clientPhone) lines.push(`Telefone: ${order.clientPhone}`);
@@ -63,6 +65,8 @@ function formatOrderSummary(order: WithId<Document>): string {
     lines.push(`Itens:\n${order.items.map((it: unknown) => `  • ${String(it)}`).join('\n')}`);
   }
   if (order.value != null) lines.push(`Valor: R$ ${Number(order.value).toFixed(2)}`);
+  if (order.paymentMethod) lines.push(`Pagamento: ${order.paymentMethod}`);
+  if (order.notes) lines.push(`Obs: ${order.notes}`);
   if (order.status) lines.push(`Status: ${order.status}`);
   if (order.delivererName) lines.push(`Entregador: ${order.delivererName}`);
   return lines.join('\n');
@@ -104,6 +108,8 @@ export const deliveryTools: Tool[] = [
         clientPhone: { type: 'string' },
         items: { type: 'array', items: { type: 'string' }, description: 'Lista de itens do pedido em texto livre' },
         value: { type: 'number', description: 'Valor do pedido em R$' },
+        paymentMethod: { type: 'string', description: 'Forma de pagamento (ex: dinheiro, cartão na entrega, pix/online)' },
+        externalCode: { type: 'string', description: 'Código da comanda na plataforma de origem (iFood, Uber Eats, etc.) — preencher SOMENTE se o restaurante informou explicitamente' },
         notes: { type: 'string', description: 'Observações livres' },
       },
     },
@@ -121,6 +127,8 @@ export const deliveryTools: Tool[] = [
         clientPhone: { type: 'string' },
         items: { type: 'array', items: { type: 'string' } },
         value: { type: 'number' },
+        paymentMethod: { type: 'string' },
+        externalCode: { type: 'string', description: 'Código externo da plataforma (iFood, Uber Eats, etc.) — somente se informado' },
         notes: { type: 'string' },
       },
     },
@@ -150,6 +158,8 @@ export const deliveryTools: Tool[] = [
         clientPhone: { type: 'string' },
         items: { type: 'array', items: { type: 'string' } },
         value: { type: 'number' },
+        paymentMethod: { type: 'string' },
+        externalCode: { type: 'string', description: 'Código externo da plataforma (iFood, Uber Eats, etc.) — somente se informado' },
         notes: { type: 'string' },
         delivererJid: { type: 'string' },
         delivererName: { type: 'string' },
@@ -327,6 +337,8 @@ export async function handleDeliveryTool(
         clientPhone: args.clientPhone ?? '',
         items: Array.isArray(args.items) ? args.items : [],
         value: args.value != null ? Number(args.value) : null,
+        paymentMethod: args.paymentMethod ?? null,
+        externalCode: args.externalCode ?? null,
         notes: args.notes ?? '',
         delivererJid: args.delivererJid ?? null,
         delivererName: args.delivererName ?? null,
@@ -345,7 +357,7 @@ export async function handleDeliveryTool(
       if (current.status !== 'rascunho') {
         return json({ error: `Pedido não está em rascunho (status atual: ${current.status}). Use delivery_update_order_status.` });
       }
-      const PATCHABLE = ['clientName', 'clientAddress', 'clientPhone', 'items', 'value', 'notes'];
+      const PATCHABLE = ['clientName', 'clientAddress', 'clientPhone', 'items', 'value', 'paymentMethod', 'externalCode', 'notes'];
       const update: Record<string, unknown> = { updatedAt: new Date() };
       for (const k of PATCHABLE) if (args[k] !== undefined) update[k] = args[k];
       const result = await db.collection('delivery_orders').findOneAndUpdate(
