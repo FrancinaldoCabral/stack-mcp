@@ -369,7 +369,8 @@ export async function handleDeliveryTool(
       const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
       const sent: Record<string, unknown> = {};
       if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text);
-      if (args.crossPost && r.delivererGroupJid) {
+      // Sempre posta no grupo dos entregadores quando configurado (crossPost legacy mantido por compatibilidade)
+      if (r.delivererGroupJid) {
         sent.delivererGroup = await sendToJid(instance, String(r.delivererGroupJid), text);
       }
       return json({ ok: true, orderRef: order.orderRef, sent });

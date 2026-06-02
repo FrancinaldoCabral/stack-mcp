@@ -114,9 +114,13 @@ const __allowed = Array.isArray(__deliveryCtx.toolsAllowed) ? __deliveryCtx.tool
 const __baseTools = [{ type: 'function', function: { name: 'buscar_memoria', description: 'Busca na base de conhecimento do negócio (RAG). Use para perguntas sobre produtos, preços, políticas, FAQs.', parameters: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } } } }];
 const __extraTools = __allowed.filter(n => __DEFS[n]).map(n => ({ type: 'function', function: { name: n, ...__DEFS[n] } }));
 const __model = businessDoc?.settings?.model || 'google/gemini-2.5-flash-lite';
-const __lastUserText = (typeof userContent === 'string' ? userContent : (Array.isArray(userContent) ? (userContent.find(c=>c.type==='text')?.text||'') : '')).toLowerCase();
+// Extrai texto real da mensagem (mensagens de grupo têm header "**+55 xx **:\n\nmensagem")
+const __rawUserText = (typeof userContent === 'string' ? userContent : (Array.isArray(userContent) ? (userContent.find(c=>c.type==='text')?.text||'') : ''));
+const __groupHeaderMatch = __rawUserText.match(/\*\*[^*]+\*\*:\s*\n+([\s\S]+)/);
+const __actualUserText = (__groupHeaderMatch ? __groupHeaderMatch[1] : __rawUserText).trim();
+const __lastUserText = __actualUserText.toLowerCase();
 const __looksLikeOrder = /(novo pedido|pedido novo|pedido:|preciso|cliente)/.test(__lastUserText) && /(r\$|rua|av\.|av\s|fone|tel|telefone|\d{8,})/.test(__lastUserText);
-const __looksLikeConfirm = /^\s*(ok|manda|confirma|confirmar|pode mandar|pode enviar|enviar|fechou|beleza|tá|ta|isso)\b/.test(__lastUserText.trim());
+const __looksLikeConfirm = /^\s*(ok|manda|confirma|confirmar|pode mandar|pode enviar|enviar|fechou|beleza|tá|ta|isso|sim|pode)\b/.test(__lastUserText.trim());
 const __toolNames = new Set([...__baseTools, ...__extraTools].map(t => t.function.name));
 let __toolChoice = 'auto';
 if (__extraTools.length > 0) {
