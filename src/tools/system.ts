@@ -92,7 +92,9 @@ async function listAllChatwootContactIds(http: ReturnType<typeof chatwootHttp>):
     const res = await safeRequest(() =>
       http.get(`/api/v1/accounts/${accountId()}/contacts`, { params: { page } }).then(r => r.data)
     );
-    const data = (res as { payload?: unknown[] })?.payload ?? [];
+    const data = (res as { data?: { payload?: unknown[] } })?.data?.payload
+      ?? (res as { payload?: unknown[] })?.payload
+      ?? [];
     if (!Array.isArray(data) || data.length === 0) break;
     data.forEach((c: unknown) => ids.add((c as { id: number }).id));
     if (data.length < 15) break;
