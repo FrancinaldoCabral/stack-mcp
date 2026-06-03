@@ -268,6 +268,8 @@ export async function handleSystemTool(name: string, args: Args): Promise<string
         for (const prefix of ['sessao', 'human_takeover', 'debounce_ts', 'buffer']) {
           redisDeleted += await deleteRedisKeysByPattern(`${prefix}:${instanceFilter}:${jidSuffix1}`).catch(() => 0);
           redisDeleted += await deleteRedisKeysByPattern(`${prefix}:${instanceFilter}:${jidSuffix2}`).catch(() => 0);
+          // também sem sufixo JID (formato usado por alguns fluxos)
+          redisDeleted += await deleteRedisKeysByPattern(`${prefix}:${instanceFilter}:${phone}`).catch(() => 0);
         }
         results.push(`✅ Redis: ${redisDeleted} chaves deletadas`);
       } catch (e) {
