@@ -91,6 +91,27 @@ function readBody(req: import('node:http').IncomingMessage): Promise<string> {
   });
 }
 
+// ── PCM → WAV helper (Gemini TTS retorna PCM bruto) ────────────────────────
+function pcmToWav(pcmBytes: Uint8Array, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
+  const dataSize = pcmBytes.length;
+  const wav = Buffer.alloc(44 + dataSize);
+  wav.write('RIFF', 0);
+  wav.writeUInt32LE(36 + dataSize, 4);
+  wav.write('WAVE', 8);
+  wav.write('fmt ', 12);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(channels, 22);
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(sampleRate * channels * bitsPerSample / 8, 28);
+  wav.writeUInt16LE(channels * bitsPerSample / 8, 32);
+  wav.writeUInt16LE(bitsPerSample, 34);
+  wav.write('data', 36);
+  wav.writeUInt32LE(dataSize, 40);
+  Buffer.from(pcmBytes).copy(wav, 44);
+  return wav;
+}
+
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 async function main() {
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
@@ -143,13 +164,22 @@ async function main() {
 
     // ── Utilitário: chama OpenRouter TTS e retorna base64 (N8N não consegue binary em Code node) ─
     webApp.post('/util/tts', async (req, res) => {
-      const { text, voice = process.env.VOICE_TTS || 'alloy', model = process.env.MODEL_TTS || 'openai/gpt-4o-mini-tts-2025-12-15' } = req.body ?? {};
+      const DEFAULT_MODEL = process.env.MODEL_TTS || 'google/gemini-3.1-flash-tts-preview';
+      const isGemini = (m: string) => m.toLowerCase().includes('gemini');
+      const DEFAULT_VOICE = isGemini(DEFAULT_MODEL)
+        ? (process.env.VOICE_TTS || 'Kore')
+        : (process.env.VOICE_TTS || 'alloy');
+      const { text, model = DEFAULT_MODEL } = req.body ?? {};
+      const voice: string = (req.body as Record<string, unknown>)?.voice as string
+        ?? (isGemini(model) ? 'Kore' : 'alloy');
       if (!text) { res.status(400).json({ error: 'text required' }); return; }
       // Aceita chave via Authorization header (N8N injeta via credencial) ou env var
       const authHeader = req.headers.authorization;
       const apiKey = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
         ?? process.env.OPENROUTER_API_KEY;
       if (!apiKey) { res.status(500).json({ error: 'no OpenRouter API key available' }); return; }
+      // Gemini TTS só suporta PCM — precisamos empacotar em WAV antes de retornar
+      const responseFormat = isGemini(model) ? 'pcm' : 'mp3';
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 30_000);
       try {
@@ -157,14 +187,16 @@ async function main() {
           method: 'POST',
           signal: controller.signal,
           headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, input: text, voice, response_format: 'mp3' }),
+          body: JSON.stringify({ model, input: text, voice, response_format: responseFormat }),
         });
         if (!r.ok) {
           const errBody = await r.text();
           res.status(502).json({ error: `OpenRouter TTS ${r.status}`, detail: errBody });
           return;
         }
-        const buf = Buffer.from(await r.arrayBuffer());
+        const rawBuf = new Uint8Array(await r.arrayBuffer());
+        // PCM → WAV (Gemini: 24000 Hz, 16-bit, mono)
+        const buf = responseFormat === 'pcm' ? pcmToWav(rawBuf, 24000, 1, 16) : Buffer.from(rawBuf);
         res.json({ base64: buf.toString('base64'), size: buf.length });
       } catch (err) {
         res.status(500).json({ error: String(err) });

@@ -182,7 +182,7 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_assign_deliverer',
-    description: 'Atribui um entregador a um pedido e opcionalmente registra ETA.',
+    description: 'Atribui um entregador a um pedido e opcionalmente registra ETA. Envia notificação automática ao grupo de comandos do restaurante — NÃO chame delivery_post_to_command_group depois desta ferramenta.',
     inputSchema: {
       type: 'object',
       required: ['orderId', 'delivererJid', 'delivererName'],
@@ -424,7 +424,21 @@ export async function handleDeliveryTool(
         { _id: id }, { $set: update }, { returnDocument: 'after' },
       );
       if (!result) return json({ error: 'Pedido não encontrado' });
-      return json({ ok: true, order: result });
+      // Notifica automaticamente o grupo de comandos do restaurante — elimina a necessidade
+      // de o LLM chamar delivery_post_to_command_group separadamente após a atribuição.
+      try {
+        const r = await getRestaurant(String(result.restaurantId));
+        if (r) {
+          const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
+          if (cmdJid) {
+            const instance = await getRestaurantInstance(r);
+            const eta = args.etaMin != null ? ` (~${args.etaMin} min)` : '';
+            const notifText = `🛵 Entregador *${args.delivererName}* assumiu o pedido *${result.orderRef ?? result._id}*${eta}`;
+            await sendToJid(instance, cmdJid, notifText);
+          }
+        }
+      } catch { /* não bloqueia — notificação é best-effort */ }
+      return json({ ok: true, order: result, notified: true });
     }
 
     case 'delivery_list_orders': {

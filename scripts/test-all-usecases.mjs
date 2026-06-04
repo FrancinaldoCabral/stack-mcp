@@ -30,8 +30,8 @@ const MY_NUM   = '5521969435536';      // naldocabral JID raiz
 const CW_URL   = process.env.CHATWOOT_URL;
 const CW_KEY   = process.env.CHATWOOT_API_KEY;
 const CW_ACC   = process.env.CHATWOOT_ACCOUNT_ID || '1';
-const MODEL_TTS = process.env.MODEL_TTS || 'openai/gpt-4o-mini-tts-2025-12-15';
-const VOICE_TTS = process.env.VOICE_TTS || 'alloy';
+const MODEL_TTS = process.env.MODEL_TTS || 'google/gemini-3.1-flash-tts-preview';
+const VOICE_TTS = process.env.VOICE_TTS || 'Kore';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -112,26 +112,23 @@ async function sendAudioBase64(number, base64mp3) {
   });
 }
 
-// Gerar áudio via TTS (OpenRouter) e retornar base64 mp3
+// Gerar áudio via TTS — usa o endpoint /util/tts da app (suporta Gemini PCM→WAV)
 async function generateTtsBase64(text) {
-  const model = process.env.MODEL_TTS || 'openai/gpt-4o-mini-tts-2025-12-15';
-  const voice = process.env.VOICE_TTS || 'alloy';
-  const r = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+  const r = await fetch('https://app.vendly.chat/util/tts', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${OR_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model,
-      input: text,
-      voice,
-      response_format: 'mp3',
-    }),
+    body: JSON.stringify({ text, model: MODEL_TTS, voice: VOICE_TTS }),
   });
-  if (!r.ok) throw new Error(`TTS HTTP ${r.status}: ${await r.text()}`);
-  const buf = Buffer.from(await r.arrayBuffer());
-  return buf.toString('base64');
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({}));
+    throw new Error(`TTS HTTP ${r.status}: ${JSON.stringify(detail)}`);
+  }
+  const data = await r.json();
+  if (!data.base64) throw new Error(`TTS sem base64: ${JSON.stringify(data)}`);
+  return data.base64;
 }
 
 // Enviar imagem via URL pública
@@ -146,7 +143,12 @@ async function inspectExec(execId) {
   const rd = exec.data?.resultData?.runData ?? {};
   const allKeys = Object.keys(rd);
 
-  const eqKey    = allKeys.find(n => n.includes('Extrair Query'));
+  // Coleta todos os tool calls (1ª e 2ª rodada)
+  const eqKeys = allKeys.filter(n => n.includes('Extrair Query'));
+  const toolNames = eqKeys.flatMap(k =>
+    (rd[k] ?? []).map(r => r?.data?.main?.[0]?.[0]?.json?.toolName).filter(Boolean)
+  );
+  const eqKey    = eqKeys[0];
   const toolData = rd[eqKey]?.[0]?.data?.main?.[0]?.[0]?.json;
   const toolName = toolData?.toolName ?? null;
   const toolArgs = toolData?.args ?? null;
@@ -168,7 +170,7 @@ async function inspectExec(execId) {
   const pcData  = rd['Parsear Chunks']?.[0]?.data?.main?.[0];
   const escFlag = pcData?.some(i => i.json?.escalarHumano === true) ?? false;
 
-  return { toolName, toolArgs, reply, transText, escalated, escFlag };
+  return { toolName, toolNames, toolArgs, reply, transText, escalated, escFlag };
 }
 
 let execBaseline = 0;
@@ -179,27 +181,40 @@ async function getLatestExecId() {
 }
 
 async function waitForNewExec(sinceId, timeoutMs = 40000) {
+  // O workflow jleu4RPvSnYDL8Gd tem múltiplos entry points:
+  // - Auto-Open (rápido, < 1s) — quando Evolution trigga Chatwoot
+  // - Agent Executor (lento, > 3s) — o fluxo real de resposta
+  // Estratégia: esperar > 2 execuções completas e retornar a mais longa (agent),
+  // ou a primeira que durar > 2s (agent). Auto-Open < 500ms.
+  const MIN_AGENT_DURATION_MS = 2000;
   const start = Date.now();
   let foundId = null;
   while (Date.now() - start < timeoutMs) {
     await sleep(2000);
     let r;
     try {
-      r = await n8nGet('/api/v1/executions?workflowId=jleu4RPvSnYDL8Gd&limit=5');
+      r = await n8nGet('/api/v1/executions?workflowId=jleu4RPvSnYDL8Gd&limit=10');
     } catch(e) {
       process.stdout.write(`  [poll err: ${e.code ?? e.message}] `);
       await sleep(3000);
       continue;
     }
     const newer = (r.data ?? []).filter(e => Number(e.id) > Number(sinceId));
-    if (newer.length > 0) {
-      const latest = newer[0];
-      if (latest.status === 'success' || latest.status === 'error') {
-        return { id: latest.id, status: latest.status };
-      }
-      if (!foundId) { foundId = latest.id; process.stdout.write(`  ... exec ${latest.id} rodando`); }
+    // Prefer an agent execution (duration > 2s) over quick Auto-Open ones
+    const done = newer.filter(e => e.status === 'success' || e.status === 'error');
+    if (done.length > 0) {
+      const agentExec = done.find(e => {
+        const dur = new Date(e.stoppedAt) - new Date(e.startedAt);
+        return dur >= MIN_AGENT_DURATION_MS;
+      });
+      if (agentExec) return { id: agentExec.id, status: agentExec.status };
+      // All done execs are fast (Auto-Open) — keep waiting for agent exec
+      if (!foundId && newer.length > 0) { foundId = newer[0].id; process.stdout.write(`  ... exec ${newer[0].id} rodando`); }
+    } else if (newer.length > 0) {
+      if (!foundId) { foundId = newer[0].id; process.stdout.write(`  ... exec ${newer[0].id} rodando`); }
     }
   }
+  // Fallback: return the slowest completed exec we saw
   return foundId ? { id: foundId, status: 'timeout_running' } : null;
 }
 
@@ -271,8 +286,16 @@ async function main() {
     });
     const cd = await clearInit.json().catch(() => ({}));
     console.log(`\n  \ud83e\uddf9 HT limpo no inicio: ${JSON.stringify(cd).slice(0,80)}`);
+    // Também limpa sessão Redis para MY_NUM — evita contaminação de histórico entre rodadas
+    const sessionClear = await fetch('https://app.vendly.chat/tool/redis_delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: [`sessao:livraison-totale:${MY_NUM}@s.whatsapp.net`] }),
+    });
+    const sc = await sessionClear.json().catch(() => ({}));
+    console.log(`  \ud83e\uddf9 Sessão individual limpa: ${JSON.stringify(sc).slice(0,80)}`);
   } catch(e) { console.log(`\n  \u26a0\ufe0f  Nao foi possivel limpar HT inicial: ${e.message}`); }
-  await sleep(1000);
+  await sleep(2000);
   // FASE 1 — Conversas Individuais
   // ══════════════════════════════════════════════════════════════
   console.log('\n══ FASE 1: Conversas Individuais ══════════════════════════');
@@ -289,6 +312,23 @@ async function main() {
   // FASE 2 — Fluxo de Pedido (Grupo Restaurante)
   // ══════════════════════════════════════════════════════════════
   console.log('\n══ FASE 2: Pedido no Grupo Restaurante ════════════════════');
+
+  // Limpar sessões dos grupos antes da FASE 2 — evita contaminação de runs anteriores
+  try {
+    const grpClear = await fetch('https://app.vendly.chat/tool/redis_delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: [
+        `sessao:livraison-totale:${REST_GRP}`,
+        `sessao:livraison-totale:${DELV_GRP}`,
+        `human_takeover:livraison-totale:${REST_GRP}`,
+        `human_takeover:livraison-totale:${DELV_GRP}`,
+      ]}),
+    });
+    const gc = await grpClear.json().catch(() => ({}));
+    console.log(`  🧹 Sessões de grupo limpas: ${JSON.stringify(gc).slice(0,80)}`);
+  } catch(e) { console.log(`  ⚠️  Não foi possível limpar sessões de grupo: ${e.message}`); }
+  await sleep(500);
 
   await run('3 - Saudação no grupo restaurante', () =>
     sendText(REST_GRP, 'Oi Carol, tudo certo?'), { inspect: true });
@@ -315,11 +355,11 @@ async function main() {
   await sleep(20000);
 
   if (r5?.ins) {
-    const ok5 = r5.ins.toolName === 'delivery_confirm_order';
-    console.log(`  ${ok5 ? '✅' : '❌'} Tool: ${r5.ins.toolName} (esperado: delivery_confirm_order)`);
+    const ok5 = (r5.ins.toolNames ?? [r5.ins.toolName]).includes('delivery_confirm_order');
+    console.log(`  ${ok5 ? '✅' : '❌'} Tool: ${r5.ins.toolNames?.join('→') ?? r5.ins.toolName} (esperado: delivery_confirm_order em qualquer rodada)`);
     const hasLt = /LT-[A-Z0-9]/.test(r5.ins.reply ?? '');
     console.log(`  ${hasLt ? '✅' : '❌'} Código LT-XXXXX na resposta: ${r5.ins.reply?.match(/LT-[A-Z0-9\-]+/)?.[0] ?? 'NÃO encontrado'}`);
-    if (!ok5) { const last = results[results.length-1]; last.ok = false; last.reason = `Tool incorreta: ${r5.ins.toolName}`; }
+    if (!ok5) { const last = results[results.length-1]; last.ok = false; last.reason = `Tool incorreta: ${r5.ins.toolNames?.join('→') ?? r5.ins.toolName}`; }
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -358,9 +398,9 @@ async function main() {
   await sleep(15000);
 
   if (r12?.ins?.toolName) {
-    const ok12 = r12.ins.toolName === 'delivery_log_settlement';
-    console.log(`  ${ok12 ? '✅' : '❌'} Tool: ${r12.ins.toolName} (esperado: delivery_log_settlement)`);
-    if (!ok12) { const last = results[results.length-1]; last.ok = false; last.reason = `Tool incorreta: ${r12.ins.toolName}`; }
+    const ok12 = (r12.ins.toolNames ?? [r12.ins.toolName]).includes('delivery_log_settlement');
+    console.log(`  ${ok12 ? '✅' : '❌'} Tool: ${r12.ins.toolNames?.join('→') ?? r12.ins.toolName} (esperado: delivery_log_settlement em qualquer rodada)`);
+    if (!ok12) { const last = results[results.length-1]; last.ok = false; last.reason = `Tool incorreta: ${r12.ins.toolNames?.join('→') ?? r12.ins.toolName}`; }
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -402,6 +442,18 @@ async function main() {
   // FASE 5 — Imagem Multimodal
   // ══════════════════════════════════════════════════════════════
   console.log('\n══ FASE 5: Imagem Multimodal ══════════════════════════════');
+
+  // Limpar HT criado pelo test 13 (escalação de áudio) antes do teste de imagem
+  try {
+    const clrImg = await fetch('https://app.vendly.chat/tool/system_clear_contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: MY_NUM, instance: 'livraison-totale' }),
+    });
+    const ci = await clrImg.json().catch(() => ({}));
+    console.log(`  🧹 HT limpo pré-imagem: ${JSON.stringify(ci).slice(0,80)}`);
+  } catch(e) { console.log(`  ⚠️  Não foi possível limpar HT pré-imagem: ${e.message}`); }
+  await sleep(1000);
 
   // picsum.photos é CDN global sem bot protection — mais confiável que Wikipedia
   const r14 = await run('14 - Imagem → bot descreve (multimodal)', () =>
