@@ -154,6 +154,10 @@ export const api = {
     req<{ ok: boolean }>(`/delivery/settlements/${id}`, { method: 'DELETE' }),
 
   // Relatórios
+  getSummaryReport: (params: Record<string, string>) => {
+    const q = '?' + new URLSearchParams(params).toString();
+    return req<import('./types').SummaryReport>(`/delivery/reports/summary${q}`);
+  },
   getRestaurantReport: (params: Record<string, string>) => {
     const q = '?' + new URLSearchParams(params).toString();
     return req<import('./types').RestaurantReport>(`/delivery/reports/restaurant${q}`);

@@ -314,6 +314,106 @@ deliveryRouter.get('/deliverers', async (_req, res) => {
 
 // ── Relatórios ────────────────────────────────────────────────────────────────
 
+// GET /api/delivery/reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Relatório geral — todos restaurantes e todos entregadores no período
+deliveryRouter.get('/reports/summary', async (req, res) => {
+  try {
+    const db = await getDb();
+    const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 30 * 86400000);
+    const to = req.query.to ? new Date(String(req.query.to) + 'T23:59:59') : new Date();
+
+    const orders = await db.collection('delivery_orders').find({
+      status: { $nin: ['rascunho', 'cancelado'] },
+      createdAt: { $gte: from, $lte: to },
+    }).toArray();
+
+    const settlements = await db.collection('delivery_settlements').find({
+      date: { $gte: from, $lte: to },
+    }).toArray();
+
+    // Resumo por restaurante
+    const byRestaurant: Record<string, {
+      restaurantId: string; restaurantName: string;
+      orderCount: number; totalOrderValue: number; totalDeliveryFees: number; totalSettlements: number;
+    }> = {};
+    for (const o of orders) {
+      const rid = String(o.restaurantId || '');
+      if (!byRestaurant[rid]) {
+        byRestaurant[rid] = {
+          restaurantId: rid,
+          restaurantName: String(o.restaurantName || ''),
+          orderCount: 0, totalOrderValue: 0, totalDeliveryFees: 0, totalSettlements: 0,
+        };
+      }
+      byRestaurant[rid].orderCount++;
+      byRestaurant[rid].totalOrderValue += Number(o.value) || 0;
+      byRestaurant[rid].totalDeliveryFees += Number(o.deliveryFee) || 0;
+    }
+    // Add settlements to restaurant summaries
+    for (const s of settlements) {
+      const rid = String(s.restaurantId || '');
+      if (byRestaurant[rid]) byRestaurant[rid].totalSettlements += Number(s.amount) || 0;
+    }
+
+    // Resumo por entregador
+    const byDeliverer: Record<string, {
+      delivererJid: string; delivererName: string;
+      orderCount: number; totalCommission: number; totalSettlements: number;
+    }> = {};
+    for (const o of orders) {
+      if (!o.delivererJid) continue;
+      const djid = String(o.delivererJid);
+      if (!byDeliverer[djid]) {
+        byDeliverer[djid] = {
+          delivererJid: djid,
+          delivererName: String(o.delivererName || ''),
+          orderCount: 0, totalCommission: 0, totalSettlements: 0,
+        };
+      }
+      byDeliverer[djid].orderCount++;
+      byDeliverer[djid].totalCommission += Number(o.deliveryFee) || 0;
+    }
+    for (const s of settlements) {
+      const djid = String(s.delivererJid || '');
+      if (byDeliverer[djid]) byDeliverer[djid].totalSettlements += Number(s.amount) || 0;
+    }
+
+    const round2 = (v: number) => Math.round(v * 100) / 100;
+    const restaurantRows = Object.values(byRestaurant).map(r => ({
+      ...r,
+      totalOrderValue: round2(r.totalOrderValue),
+      totalDeliveryFees: round2(r.totalDeliveryFees),
+      totalSettlements: round2(r.totalSettlements),
+      outstandingDebt: round2(r.totalDeliveryFees - r.totalSettlements),
+      totalRestaurantProfit: round2(r.totalOrderValue - r.totalDeliveryFees),
+    })).sort((a, b) => b.totalDeliveryFees - a.totalDeliveryFees);
+
+    const delivererRows = Object.values(byDeliverer).map(d => ({
+      ...d,
+      totalCommission: round2(d.totalCommission),
+      totalSettlements: round2(d.totalSettlements),
+      outstandingCredit: round2(d.totalCommission - d.totalSettlements),
+    })).sort((a, b) => b.totalCommission - a.totalCommission);
+
+    const totalDeliveryFees = round2(restaurantRows.reduce((s, r) => s + r.totalDeliveryFees, 0));
+    const totalSettlementsRestaurant = round2(restaurantRows.reduce((s, r) => s + r.totalSettlements, 0));
+    const totalOrderValue = round2(restaurantRows.reduce((s, r) => s + r.totalOrderValue, 0));
+
+    res.json({
+      period: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+      totals: {
+        orderCount: orders.length,
+        totalOrderValue,
+        totalDeliveryFees,
+        totalSettlementsReceived: totalSettlementsRestaurant,
+        outstandingFromRestaurants: round2(totalDeliveryFees - totalSettlementsRestaurant),
+      },
+      restaurants: restaurantRows,
+      deliverers: delivererRows,
+    });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 // GET /api/delivery/reports/restaurant?restaurantId=&from=YYYY-MM-DD&to=YYYY-MM-DD
 deliveryRouter.get('/reports/restaurant', async (req, res) => {
   try {

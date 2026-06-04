@@ -1,16 +1,17 @@
 /**
- * Atendente virtual — configuração simples do agente IA principal do negócio.
- * Esconde modelo/tokens em "Avançado". Sem jargão técnico.
+ * Atendente virtual — salva systemPrompt/model/assistantName diretamente no
+ * documento do business (campos raiz), que é o que o workflow N8N lê.
+ * O sistema de agentes (business.agents[]) não é lido pelo workflow atual.
  */
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import {
-  Typography, Card, Form, Input, Button, message, Collapse, AutoComplete, Alert, Spin,
+  Typography, Card, Form, Input, Button, message, Collapse, AutoComplete, Alert,
 } from 'antd';
-import { RobotOutlined, SaveOutlined } from '@ant-design/icons';
+import { RobotOutlined, SaveOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useBusiness } from '../lib/BusinessContext';
 import { api } from '../lib/api';
-import type { Agent } from '../lib/types';
+import type { Business } from '../lib/types';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -41,29 +42,21 @@ export default function Atendente() {
   const qc = useQueryClient();
   const [form] = Form.useForm();
 
-  // Pega o agente principal (primeiro). Se não houver, vamos criar ao salvar.
-  const agent: Agent | undefined = business.agents?.[0];
-
   useEffect(() => {
     form.setFieldsValue({
-      assistantName: agent?.assistantName ?? 'Vendly',
-      systemPrompt: agent?.systemPrompt ?? DEFAULT_PROMPT,
-      model: agent?.model ?? 'google/gemini-2.5-flash-lite',
+      assistantName: (business as Business & { assistantName?: string }).assistantName ?? '',
+      systemPrompt: business.systemPrompt ?? DEFAULT_PROMPT,
+      model: business.settings?.model ?? 'google/gemini-2.5-flash-lite',
     });
-  }, [agent, form]);
+  }, [business._id, form]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = useMutation({
     mutationFn: async (vals: { assistantName: string; systemPrompt: string; model: string }) => {
-      const payload = {
-        name: 'Atendente principal',
+      return api.updateBusiness(business._id, {
         assistantName: vals.assistantName,
         systemPrompt: vals.systemPrompt,
-        model: vals.model,
-      };
-      if (agent) {
-        return api.updateAgent(business._id, agent._id, payload);
-      }
-      return api.createAgent(business._id, payload);
+        settings: { ...(business.settings ?? {}), model: vals.model },
+      } as Partial<Business>);
     },
     onSuccess: () => {
       message.success('Atendente salvo!');
@@ -73,6 +66,8 @@ export default function Atendente() {
     onError: (e: Error) => message.error(e.message),
   });
 
+  const hasPrompt = !!business.systemPrompt;
+
   return (
     <div>
       <Title level={3} style={{ marginTop: 0 }}>
@@ -80,15 +75,18 @@ export default function Atendente() {
       </Title>
       <Paragraph type="secondary">
         Configure como o atendente automático conversa com seus clientes no WhatsApp.
+        Esta configuração aplica-se a conversas individuais. Para grupos (restaurante/entregadores),
+        use as <strong>Personas</strong> na aba Delivery.
       </Paragraph>
 
-      {!agent && (
+      {!hasPrompt && (
         <Alert
           type="info"
+          icon={<InfoCircleOutlined />}
           showIcon
           style={{ marginBottom: 16 }}
-          message="Nenhum atendente configurado ainda"
-          description="Preencha o nome e as instruções abaixo e clique em Salvar para criar o atendente."
+          message="Prompt padrão em uso"
+          description="Nenhum prompt customizado configurado. O atendente está usando o prompt padrão do sistema. Edite abaixo para personalizar."
         />
       )}
 
@@ -97,22 +95,22 @@ export default function Atendente() {
           <Form.Item
             name="assistantName"
             label="Nome do atendente"
-            tooltip="Como o atendente vai se apresentar nas mensagens"
+            tooltip="Nome pelo qual o atendente se apresenta nas conversas individuais"
             rules={[{ required: true, message: 'Dê um nome ao seu atendente' }]}
           >
-            <Input placeholder="Ex: Sofia, Carol, Bot da LT" />
+            <Input placeholder="Ex: Carol, Sofia, Assistente LT" />
           </Form.Item>
 
           <Form.Item
             name="systemPrompt"
-            label="Instruções do atendente"
-            tooltip="Descreva como ele deve se comportar, o que pode ajudar e o tom de voz"
+            label="Instruções do atendente (System Prompt)"
+            tooltip="Define o comportamento, tom e capacidades do atendente nas conversas individuais"
             rules={[{ required: true, message: 'Escreva as instruções do atendente' }]}
           >
             <Input.TextArea
               rows={14}
               placeholder="Escreva como o atendente deve agir..."
-              style={{ fontFamily: 'inherit' }}
+              style={{ fontFamily: 'monospace', fontSize: 13 }}
             />
           </Form.Item>
 
@@ -125,7 +123,7 @@ export default function Atendente() {
                 <Form.Item
                   name="model"
                   label="Modelo de inteligência artificial"
-                  help="Padrão recomendado: Gemini 2.5 Flash Lite. Só mude se souber o que está fazendo."
+                  help="Padrão recomendado: Gemini 2.5 Flash Lite. Afeta conversas individuais e de grupo."
                 >
                   <AutoComplete
                     options={POPULAR_MODELS}
@@ -146,13 +144,11 @@ export default function Atendente() {
               icon={<SaveOutlined />}
               loading={save.isPending}
             >
-              Salvar atendente
+              Salvar
             </Button>
           </div>
         </Form>
       </Card>
-
-      {save.isPending && <Spin />}
     </div>
   );
 }

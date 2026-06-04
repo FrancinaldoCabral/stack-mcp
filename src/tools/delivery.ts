@@ -139,12 +139,12 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_confirm_order',
-    description: 'Confirma um pedido em rascunho (status → "pendente") e posta resumo no grupo de comandos do restaurante. Use após o entregador confirmar todos os dados.',
+    description: 'Confirma o rascunho e posta no grupo de entregadores. Se o orderId estiver no Contexto Operacional (ÚLTIMO RASCUNHO), use-o. Caso contrário auto-encontra o rascunho mais recente do restaurante. NÃO chame delivery_draft_order antes — use o rascunho existente.',
     inputSchema: {
       type: 'object',
-      required: ['orderId'],
       properties: {
-        orderId: { type: 'string' },
+        orderId: { type: 'string', description: 'ID do rascunho. Omita para usar o rascunho mais recente do restaurante.' },
+        restaurantId: { type: 'string', description: 'Necessário apenas se orderId não for informado (para localizar o rascunho).' },
         crossPost: { type: 'boolean', description: 'Também postar no grupo de entregadores (default false)' },
       },
     },
@@ -335,25 +335,6 @@ export async function handleDeliveryTool(
       const now = new Date();
       const status = name === 'delivery_draft_order' ? 'rascunho' : 'pendente';
 
-      if (name === 'delivery_draft_order') {
-        // Upsert: se já existe um rascunho aberto para este restaurante, atualiza em vez de criar
-        const existing = await db.collection('delivery_orders').findOne(
-          { restaurantId: String(r._id), status: 'rascunho' },
-          { sort: { createdAt: -1 } },
-        );
-        if (existing) {
-          const PATCHABLE = ['clientName', 'clientAddress', 'clientPhone', 'items', 'value', 'deliveryFee', 'paymentMethod', 'externalCode', 'notes'];
-          const upd: Record<string, unknown> = { updatedAt: now };
-          for (const k of PATCHABLE) if (args[k] !== undefined) upd[k] = args[k];
-          const updated = await db.collection('delivery_orders').findOneAndUpdate(
-            { _id: existing._id },
-            { $set: upd },
-            { returnDocument: 'after' },
-          );
-          return json({ ok: true, orderId: updated!._id, orderRef: updated!.orderRef, status: 'rascunho', updated: true });
-        }
-      }
-
       const doc: Record<string, unknown> = {
         orderRef: genOrderRef(),
         restaurantId: String(r._id),
@@ -397,11 +378,19 @@ export async function handleDeliveryTool(
     }
 
     case 'delivery_confirm_order': {
-      const id = new ObjectId(String(args.orderId));
+      // Se orderId não fornecido, auto-encontra o rascunho mais recente do restaurante
+      let orderFilter: Record<string, unknown> = { status: 'rascunho' };
+      if (args.orderId) {
+        orderFilter = { _id: new ObjectId(String(args.orderId)), status: 'rascunho' };
+      } else if (args.restaurantId) {
+        orderFilter = { restaurantId: String(args.restaurantId), status: 'rascunho' };
+      } else {
+        return json({ error: 'Informe orderId ou restaurantId para confirmar o pedido' });
+      }
       const order = await db.collection('delivery_orders').findOneAndUpdate(
-        { _id: id, status: 'rascunho' },
+        orderFilter,
         { $set: { status: 'pendente', updatedAt: new Date() } },
-        { returnDocument: 'after' },
+        { returnDocument: 'after', sort: { createdAt: -1 } },
       );
       if (!order) return json({ error: 'Pedido não encontrado ou não está em rascunho' });
       const r = await getRestaurant(String(order.restaurantId));

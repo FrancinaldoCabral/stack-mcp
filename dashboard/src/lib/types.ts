@@ -17,6 +17,8 @@ export interface Agent {
 export interface Business {
   _id: string;
   name: string;
+  assistantName?: string;
+  systemPrompt?: string;
   instances: string[];
   agents: Agent[];
   instanceAgents: Record<string, string>;   // instanceName → agent._id
@@ -212,6 +214,39 @@ export interface DelivererReport {
     orderCount: number;
   };
   orders: DelivererReportOrder[];
+}
+
+export interface SummaryReportRestaurant {
+  restaurantId: string;
+  restaurantName: string;
+  orderCount: number;
+  totalOrderValue: number;
+  totalDeliveryFees: number;
+  totalSettlements: number;
+  outstandingDebt: number;
+  totalRestaurantProfit: number;
+}
+
+export interface SummaryReportDeliverer {
+  delivererJid: string;
+  delivererName: string;
+  orderCount: number;
+  totalCommission: number;
+  totalSettlements: number;
+  outstandingCredit: number;
+}
+
+export interface SummaryReport {
+  period: { from: string; to: string };
+  totals: {
+    orderCount: number;
+    totalOrderValue: number;
+    totalDeliveryFees: number;
+    totalSettlementsReceived: number;
+    outstandingFromRestaurants: number;
+  };
+  restaurants: SummaryReportRestaurant[];
+  deliverers: SummaryReportDeliverer[];
 }
 
 export interface DeliverySettlement {

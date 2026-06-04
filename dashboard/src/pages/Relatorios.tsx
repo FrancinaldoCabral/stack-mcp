@@ -7,7 +7,9 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type {
-  DeliveryRestaurant, RestaurantReport, DelivererReport, RestaurantReportOrder, DelivererReportOrder,
+  DeliveryRestaurant, RestaurantReport, DelivererReport,
+  RestaurantReportOrder, DelivererReportOrder,
+  SummaryReport, SummaryReportRestaurant, SummaryReportDeliverer,
 } from '../lib/types';
 import dayjs from 'dayjs';
 
@@ -16,6 +18,156 @@ const { RangePicker } = DatePicker;
 
 const eur = (v: number | null | undefined) =>
   v != null ? `€${Number(v).toFixed(2)}` : '—';
+
+// ── Relatório Geral (Summary) ────────────────────────────────────────────────
+
+function SummaryTab() {
+  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>([
+    dayjs().subtract(29, 'day').startOf('day'),
+    dayjs().endOf('day'),
+  ]);
+  const [enabled, setEnabled] = useState(true);
+
+  const params = {
+    from: range ? range[0].format('YYYY-MM-DD') : '',
+    to: range ? range[1].format('YYYY-MM-DD') : '',
+  };
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['report-summary', params],
+    queryFn: () => api.getSummaryReport(params),
+    enabled,
+  });
+
+  const restaurantCols = [
+    { title: 'Restaurante', dataIndex: 'restaurantName', key: 'name', ellipsis: true },
+    { title: 'Pedidos', dataIndex: 'orderCount', key: 'cnt', width: 70, align: 'right' as const },
+    { title: 'Valor total', dataIndex: 'totalOrderValue', key: 'val', width: 100, align: 'right' as const,
+      render: (v: number) => eur(v) },
+    { title: 'Entregas LT', dataIndex: 'totalDeliveryFees', key: 'fees', width: 100, align: 'right' as const,
+      render: (v: number) => <Text strong style={{ color: '#1677ff' }}>{eur(v)}</Text> },
+    { title: 'Acertos', dataIndex: 'totalSettlements', key: 'sett', width: 90, align: 'right' as const,
+      render: (v: number) => eur(v) },
+    { title: 'A receber', dataIndex: 'outstandingDebt', key: 'debt', width: 95, align: 'right' as const,
+      render: (v: number) => v > 0
+        ? <Tag color="red">{eur(v)}</Tag>
+        : <Tag color="green">{eur(v)}</Tag> },
+    { title: 'Lucro rest.', dataIndex: 'totalRestaurantProfit', key: 'profit', width: 100, align: 'right' as const,
+      render: (v: number) => eur(v) },
+  ];
+
+  const delivererCols = [
+    { title: 'Entregador', dataIndex: 'delivererName', key: 'name', ellipsis: true },
+    { title: 'Entregas', dataIndex: 'orderCount', key: 'cnt', width: 70, align: 'right' as const },
+    { title: 'Comissão total', dataIndex: 'totalCommission', key: 'comm', width: 115, align: 'right' as const,
+      render: (v: number) => <Text strong style={{ color: '#52c41a' }}>{eur(v)}</Text> },
+    { title: 'Acertos', dataIndex: 'totalSettlements', key: 'sett', width: 90, align: 'right' as const,
+      render: (v: number) => eur(v) },
+    { title: 'A pagar', dataIndex: 'outstandingCredit', key: 'credit', width: 90, align: 'right' as const,
+      render: (v: number) => v > 0
+        ? <Tag color="orange">{eur(v)}</Tag>
+        : <Tag color="green">{eur(v)}</Tag> },
+  ];
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <RangePicker
+          value={range}
+          onChange={v => { setRange(v as [dayjs.Dayjs, dayjs.Dayjs] | null); setEnabled(false); }}
+          format="DD/MM/YYYY"
+        />
+        <Button type="primary" onClick={() => { setEnabled(true); refetch(); }}>
+          Atualizar
+        </Button>
+      </Space>
+
+      {isLoading && <Spin style={{ display: 'block', margin: '40px auto' }} />}
+
+      {data && (
+        <>
+          {/* KPIs gerais */}
+          <Row gutter={12} style={{ marginBottom: 20 }}>
+            <Col span={4}>
+              <Card size="small">
+                <Statistic title="Pedidos" value={data.totals.orderCount} />
+              </Card>
+            </Col>
+            <Col span={5}>
+              <Card size="small">
+                <Statistic title="Valor total" value={data.totals.totalOrderValue} prefix="€" precision={2} />
+              </Card>
+            </Col>
+            <Col span={5}>
+              <Card size="small">
+                <Statistic title="Entregas LT" value={data.totals.totalDeliveryFees} prefix="€" precision={2}
+                  valueStyle={{ color: '#1677ff', fontWeight: 700 }} />
+              </Card>
+            </Col>
+            <Col span={5}>
+              <Card size="small">
+                <Statistic title="Acertos recebidos" value={data.totals.totalSettlementsReceived} prefix="€" precision={2}
+                  valueStyle={{ color: '#52c41a' }} />
+              </Card>
+            </Col>
+            <Col span={5}>
+              <Card size="small">
+                <Statistic title="A receber (rest.)" value={data.totals.outstandingFromRestaurants} prefix="€" precision={2}
+                  valueStyle={{ color: '#f5222d', fontWeight: 700 }} />
+              </Card>
+            </Col>
+          </Row>
+
+          <Divider orientation="left">Por Restaurante</Divider>
+          <Table
+            rowKey="restaurantId"
+            dataSource={data.restaurants as SummaryReportRestaurant[]}
+            columns={restaurantCols}
+            size="small"
+            pagination={false}
+            summary={rows => {
+              const totalFees = rows.reduce((s, r) => s + r.totalDeliveryFees, 0);
+              const totalDebt = rows.reduce((s, r) => s + r.outstandingDebt, 0);
+              return (
+                <Table.Summary.Row style={{ fontWeight: 700 }}>
+                  <Table.Summary.Cell index={0}>Total</Table.Summary.Cell>
+                  <Table.Summary.Cell index={1} align="right">{rows.reduce((s, r) => s + r.orderCount, 0)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={2} align="right">{eur(rows.reduce((s, r) => s + r.totalOrderValue, 0))}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={3} align="right"><Text style={{ color: '#1677ff', fontWeight: 700 }}>{eur(totalFees)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={4} align="right">{eur(rows.reduce((s, r) => s + r.totalSettlements, 0))}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={5} align="right"><Text style={{ color: '#f5222d', fontWeight: 700 }}>{eur(totalDebt)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={6} align="right">{eur(rows.reduce((s, r) => s + r.totalRestaurantProfit, 0))}</Table.Summary.Cell>
+                </Table.Summary.Row>
+              );
+            }}
+          />
+
+          <Divider orientation="left" style={{ marginTop: 24 }}>Por Entregador</Divider>
+          <Table
+            rowKey="delivererJid"
+            dataSource={data.deliverers as SummaryReportDeliverer[]}
+            columns={delivererCols}
+            size="small"
+            pagination={false}
+            summary={rows => {
+              const totalComm = rows.reduce((s, r) => s + r.totalCommission, 0);
+              const totalCredit = rows.reduce((s, r) => s + r.outstandingCredit, 0);
+              return (
+                <Table.Summary.Row style={{ fontWeight: 700 }}>
+                  <Table.Summary.Cell index={0}>Total</Table.Summary.Cell>
+                  <Table.Summary.Cell index={1} align="right">{rows.reduce((s, r) => s + r.orderCount, 0)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={2} align="right"><Text style={{ color: '#52c41a', fontWeight: 700 }}>{eur(totalComm)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={3} align="right">{eur(rows.reduce((s, r) => s + r.totalSettlements, 0))}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={4} align="right"><Text style={{ color: '#f5222d', fontWeight: 700 }}>{eur(totalCredit)}</Text></Table.Summary.Cell>
+                </Table.Summary.Row>
+              );
+            }}
+          />
+        </>
+      )}
+    </div>
+  );
+}
 
 // ── Relatório do Restaurante ─────────────────────────────────────────────────
 
@@ -371,8 +523,9 @@ function DelivererReportTab() {
 
 export default function Relatorios() {
   const items = [
-    { key: 'restaurant', label: 'Relatório Restaurante', children: <RestaurantReportTab /> },
-    { key: 'deliverer', label: 'Relatório Entregador', children: <DelivererReportTab /> },
+    { key: 'summary', label: 'Geral', children: <SummaryTab /> },
+    { key: 'restaurant', label: 'Por Restaurante', children: <RestaurantReportTab /> },
+    { key: 'deliverer', label: 'Por Entregador', children: <DelivererReportTab /> },
   ];
 
   return (
