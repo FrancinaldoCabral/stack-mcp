@@ -588,7 +588,8 @@ export async function handleDeliveryTool(
       }
 
       const instance = await getRestaurantInstance(r);
-      const text = `🆕 Novo pedido confirmado:\n\n${formatOrderSummary(order)}\n\n_Quem aceita? *Responda esta mensagem* para pegar o pedido._`;
+      // ↩️ instrução de reply é ESSENCIAL — o filtro mecânico do agente só ativa via WhatsApp reply
+      const text = `🆕 Novo pedido:\n\n${formatOrderSummary(order)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
       const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
       const sent: Record<string, unknown> = {};
       if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text.replace('\n\n_Quem aceita? *Responda esta mensagem* para pegar o pedido._', ''));
