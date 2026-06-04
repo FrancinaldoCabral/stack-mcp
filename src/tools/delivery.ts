@@ -239,13 +239,14 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_list_orders',
-    description: 'Lista pedidos. Filtros opcionais por restaurantId, status, delivererJid, últimos N dias.',
+    description: 'Lista pedidos. Filtros opcionais por restaurantId, status, delivererJid, delivererPhone (só dígitos — ignora @c.us/@s.whatsapp.net), últimos N dias.',
     inputSchema: {
       type: 'object',
       properties: {
         restaurantId: { type: 'string' },
         status: { type: 'string' },
         delivererJid: { type: 'string' },
+        delivererPhone: { type: 'string', description: 'Número do entregador em dígitos puros (sem @). Busca independente do sufixo @c.us ou @s.whatsapp.net.' },
         days: { type: 'number' },
         limit: { type: 'number' },
       },
@@ -773,6 +774,13 @@ export async function handleDeliveryTool(
       if (args.restaurantId) filter.restaurantId = String(args.restaurantId);
       if (args.status) filter.status = String(args.status);
       if (args.delivererJid) filter.delivererJid = String(args.delivererJid);
+      // delivererPhone: busca por dígitos puros do número, independente de @c.us/@s.whatsapp.net
+      if (args.delivererPhone) {
+        const phone = String(args.delivererPhone).replace(/\D/g, '');
+        if (phone) {
+          filter.delivererJid = { $regex: `^${phone}@`, $options: 'i' };
+        }
+      }
       if (args.days) {
         const since = new Date(Date.now() - Number(args.days) * 86_400_000);
         filter.createdAt = { $gte: since };
