@@ -43,13 +43,26 @@ async function sendToJid(
   jid: string,
   text: string,
   mentionedList?: string[],
+  quotedMessageId?: string,
 ): Promise<unknown> {
   const http = evolution();
   const body: Record<string, unknown> = { number: jid, text, delay: 500 };
   if (mentionedList?.length) body.mentionedList = mentionedList;
+  if (quotedMessageId) body.quoted = { key: { id: quotedMessageId } };
   return safeRequest(() =>
     http.post(`/message/sendText/${instance}`, body).then(r => r.data)
   );
+}
+
+/** Extrai o message ID da resposta da Evolution API (key.id).
+ *  safeRequest envolve com { data: EvolutionResponse } ou { error: string }.
+ */
+function extractMessageId(res: unknown): string | null {
+  const r = res as Record<string, unknown> | null;
+  // Tenta { data: { key: { id } } } (caminho normal via safeRequest)
+  const inner = (r?.data ?? r) as Record<string, unknown> | undefined;
+  const key = inner?.key as Record<string, unknown> | undefined;
+  return typeof key?.id === 'string' ? key.id : null;
 }
 
 function genOrderRef(): string {
@@ -62,7 +75,9 @@ function genOrderRef(): string {
 function formatOrderSummary(order: WithId<Document>): string {
   const lines: string[] = [];
   lines.push(`*Pedido ${order.orderRef ?? order._id}*`);
-  if (order.externalCode) lines.push(`Código: ${order.externalCode}`);
+  // externalCode: sempre presente — campo "Code" da plataforma de origem (iFood, Uber Eats, etc.)
+  // Mostrado mesmo se vazio para que entregadores saibam que o campo existe
+  lines.push(`🔑 Code: ${order.externalCode ? String(order.externalCode) : '—'}`);
   if (order.clientName) lines.push(`Cliente: ${order.clientName}`);
   if (order.clientAddress) lines.push(`Endereço: ${order.clientAddress}`);
   if (order.clientPhone) lines.push(`Telefone: ${order.clientPhone}`);
@@ -119,7 +134,7 @@ export const deliveryTools: Tool[] = [
         value: { type: 'number', description: 'Valor do pedido em €' },
         deliveryFee: { type: 'number', description: 'Taxa de entrega em € (use delivery_calc_fee para calcular ou preencha se já souber)' },
         paymentMethod: { type: 'string', description: 'Forma de pagamento (ex: dinheiro, cartão na entrega, MB Way, Multibanco)' },
-        externalCode: { type: 'string', description: 'Código da comanda na plataforma de origem — preencher SOMENTE se o restaurante informou explicitamente' },
+        externalCode: { type: 'string', description: 'Código/comanda de outra plataforma (iFood, Uber Eats, etc.). Solicite ao restaurante — pode ficar em branco se não houver, mas SEMPRE pergunte antes de confirmar.' },
         commune: { type: 'string', description: 'Município/bairro do cliente (ex: Ixelles, Uccle, Bruxelles)' },
         notes: { type: 'string', description: 'Observações livres' },
       },
@@ -140,7 +155,7 @@ export const deliveryTools: Tool[] = [
         value: { type: 'number', description: 'Valor do pedido em €' },
         deliveryFee: { type: 'number', description: 'Taxa de entrega em €' },
         paymentMethod: { type: 'string' },
-        externalCode: { type: 'string', description: 'Código externo da plataforma — somente se informado' },
+        externalCode: { type: 'string', description: 'Código/comanda de outra plataforma (iFood, Uber Eats, etc.) — inclua mesmo se vazio string' },
         commune: { type: 'string', description: 'Município/bairro do cliente' },
         notes: { type: 'string' },
       },
@@ -236,7 +251,7 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_get_order',
-    description: 'Retorna um pedido por ID ou orderRef (LT-XXXXXX).',
+    description: 'Retorna um pedido por ID ou orderRef (LT-XXXXXX). O campo lastDelivererGroupMsgId contém o ID da última mensagem postada no grupo de entregadores — use como quotedMessageId para responder diretamente ao post do pedido.',
     inputSchema: {
       type: 'object',
       required: ['orderIdOrRef'],
@@ -264,7 +279,7 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_post_to_command_group',
-    description: 'Envia mensagem ao grupo (ou contato) de comandos do restaurante. Use para espelhar comunicações importantes do entregador para o restaurante. Use o parâmetro "message" com o texto a enviar.',
+    description: 'Envia mensagem ao grupo (ou contato) de comandos do restaurante. Use para espelhar comunicações importantes do entregador para o restaurante.',
     inputSchema: {
       type: 'object',
       required: ['restaurantId', 'message'],
@@ -272,25 +287,37 @@ export const deliveryTools: Tool[] = [
         restaurantId: { type: 'string' },
         message: { type: 'string', description: 'Texto da mensagem a enviar ao grupo' },
         text: { type: 'string', description: 'Alias de message (deprecated)' },
+        mentionedList: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'JIDs a mencionar com @ (ex: ["5511999@s.whatsapp.net"]). O texto deve conter @NUMERO correspondente.',
+        },
+        quotedMessageId: { type: 'string', description: 'ID de uma mensagem anterior para responder (WhatsApp reply/quote).' },
       },
     },
   },
   {
     name: 'delivery_post_to_deliverer_group',
-    description: 'Envia mensagem ao grupo de entregadores do restaurante. Use o parâmetro "message" com o texto a enviar.',
+    description: 'Envia mensagem ao grupo de entregadores. Para @mencionar um entregador inclua o JID em mentionedList e @NUMERO no texto. Para responder a uma mensagem específica use quotedMessageId.',
     inputSchema: {
       type: 'object',
       required: ['restaurantId', 'message'],
       properties: {
         restaurantId: { type: 'string' },
-        message: { type: 'string', description: 'Texto da mensagem a enviar ao grupo' },
+        message: { type: 'string', description: 'Texto da mensagem. Inclua @NUMERO (sem código do país) para cada JID em mentionedList.' },
         text: { type: 'string', description: 'Alias de message (deprecated)' },
+        mentionedList: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'JIDs a mencionar com @ (ex: ["5511999@s.whatsapp.net"]). O texto DEVE conter @5511999 (sem @s.whatsapp.net) para cada JID.',
+        },
+        quotedMessageId: { type: 'string', description: 'ID de uma mensagem anterior para responder (WhatsApp reply/quote). Use o lastMsgId do pedido quando disponível.' },
       },
     },
   },
   {
     name: 'delivery_calc_fee',
-    description: 'Calcula distância e taxa de entrega (€) do restaurante até o cliente via tabela de preços configurada. Se orderId for fornecido, salva automaticamente a taxa no pedido. Usa Nominatim + OSRM — sem chave de API.',
+    description: 'Calcula distância de condução e taxa de entrega (€) via Google Routes API. Aceita endereços completos como texto — sem geocoding separado. Se orderId fornecido, salva a taxa automaticamente no pedido.',
     inputSchema: {
       type: 'object',
       required: ['restaurantId', 'clientAddress'],
@@ -304,26 +331,47 @@ export const deliveryTools: Tool[] = [
   },
 ];
 
-// ── Geocoding + Routing (Nominatim + OSRM, ambos gratuitos sem chave) ────────
-async function geocode(address: string): Promise<{ lat: number; lon: number; display: string }> {
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`;
-  const r = await fetch(url, { headers: { 'User-Agent': 'stack-mcp/1.0 (vendly delivery)' } });
-  if (!r.ok) throw new Error(`Nominatim ${r.status}`);
-  const data = await r.json() as Array<{ lat: string; lon: string; display_name: string }>;
-  if (!data?.[0]) throw new Error(`Endereço não encontrado: ${address}`);
-  return { lat: +data[0].lat, lon: +data[0].lon, display: data[0].display_name };
-}
+// ── Google Routes API v2 ─────────────────────────────────────────────────────
 
-async function routeDistanceKm(
-  a: { lat: number; lon: number },
-  b: { lat: number; lon: number },
-): Promise<number> {
-  const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`OSRM ${r.status}`);
-  const data = await r.json() as { routes?: Array<{ distance: number }> };
-  const meters = data?.routes?.[0]?.distance;
-  if (typeof meters !== 'number') throw new Error('OSRM não retornou rota');
+/**
+ * Calcula a distância de condução entre dois endereços usando a Google Routes API v2.
+ * Aceita strings de endereço diretamente — sem geocoding separado.
+ */
+async function computeRouteDistanceKm(originAddress: string, destAddress: string): Promise<number> {
+  const apiKey = config.google.routeApiKey;
+  if (!apiKey) throw new Error('GOOGLE_ROUTE_API_KEY não configurada');
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10_000);
+  let r: Response;
+  try {
+    r = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'routes.distanceMeters',
+      },
+      body: JSON.stringify({
+        origin: { address: originAddress },
+        destination: { address: destAddress },
+        travelMode: 'DRIVE',
+        routingPreference: 'TRAFFIC_UNAWARE',
+      }),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    throw new Error(`Google Routes API ${r.status}: ${body.slice(0, 200)}`);
+  }
+
+  const data = await r.json() as { routes?: Array<{ distanceMeters: number }> };
+  const meters = data?.routes?.[0]?.distanceMeters;
+  if (typeof meters !== 'number') throw new Error('Google Routes API não retornou rota para esses endereços');
   return meters / 1000;
 }
 
@@ -343,11 +391,7 @@ async function tryCalcFee(
     const originAddress = (restaurant.address as string | undefined)?.trim();
     if (!originAddress || !clientAddress.trim()) return null;
 
-    const [origin, dest] = await Promise.all([
-      geocode(originAddress),
-      geocode(clientAddress.trim()),
-    ]);
-    const distanceKm = await routeDistanceKm(origin, dest);
+    const distanceKm = await computeRouteDistanceKm(originAddress, clientAddress.trim());
 
     const db = await getDb();
     const bizId = restaurant.businessId as string | undefined;
@@ -424,6 +468,7 @@ export async function handleDeliveryTool(
           const updated = await db.collection('delivery_orders').findOneAndUpdate(
             { _id: existing._id }, { $set: upd }, { returnDocument: 'after' },
           );
+          const feeOk = updated!.deliveryFee != null;
           return json({
             ok: true,
             orderId: updated!._id,
@@ -432,6 +477,8 @@ export async function handleDeliveryTool(
             updated: true,
             deliveryFee: updated!.deliveryFee,
             distanceKm: updated!.distanceKm,
+            feeStatus: feeOk ? 'calculated' : 'pending',
+            feeHint: feeOk ? undefined : 'Taxa ainda não calculada. Chame delivery_calc_fee(restaurantId, clientAddress, orderId) assim que tiver o endereço completo.',
           });
         }
       }
@@ -466,6 +513,7 @@ export async function handleDeliveryTool(
         updatedAt: now,
       };
       const result = await db.collection('delivery_orders').insertOne(doc);
+      const feeOk = doc.deliveryFee != null;
       return json({
         ok: true,
         orderId: result.insertedId,
@@ -473,7 +521,8 @@ export async function handleDeliveryTool(
         status,
         deliveryFee: doc.deliveryFee,
         distanceKm: doc.distanceKm,
-        feeCalculated: autoFee != null,
+        feeStatus: feeOk ? 'calculated' : 'pending',
+        feeHint: feeOk ? undefined : 'Taxa não calculada automaticamente (verifique se o restaurante tem endereço e se o negócio tem deliveryFeeTable). Chame delivery_calc_fee(restaurantId, clientAddress, orderId) para calcular.',
       });
     }
 
@@ -539,14 +588,23 @@ export async function handleDeliveryTool(
       }
 
       const instance = await getRestaurantInstance(r);
-      const text = `🆕 Novo pedido confirmado:\n\n${formatOrderSummary(order)}\n\nQuem aceita? Responda esta mensagem.`;
+      const text = `🆕 Novo pedido confirmado:\n\n${formatOrderSummary(order)}\n\n_Quem aceita? *Responda esta mensagem* para pegar o pedido._`;
       const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
       const sent: Record<string, unknown> = {};
-      if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text.replace('\n\nQuem aceita? Responda esta mensagem.', ''));
+      if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text.replace('\n\n_Quem aceita? *Responda esta mensagem* para pegar o pedido._', ''));
+      let delivererMsgId: string | null = null;
       if (r.delivererGroupJid) {
-        sent.delivererGroup = await sendToJid(instance, String(r.delivererGroupJid), text);
+        const dlvSent = await sendToJid(instance, String(r.delivererGroupJid), text);
+        sent.delivererGroup = dlvSent;
+        delivererMsgId = extractMessageId(dlvSent);
+        if (delivererMsgId) {
+          await db.collection('delivery_orders').updateOne(
+            { _id: order._id },
+            { $set: { lastDelivererGroupMsgId: delivererMsgId, updatedAt: new Date() } },
+          );
+        }
       }
-      return json({ ok: true, orderRef: order.orderRef, deliveryFee: order.deliveryFee, sent });
+      return json({ ok: true, orderRef: order.orderRef, deliveryFee: order.deliveryFee, delivererMsgId, sent });
     }
 
     case 'delivery_update_order_status': {
@@ -641,7 +699,7 @@ export async function handleDeliveryTool(
           }
         }
       } catch { /* best-effort */ }
-      return json({ ok: true, order: result, notified: true });
+      return json({ ok: true, order: result, notified: true, lastDelivererGroupMsgId: result.lastDelivererGroupMsgId ?? null });
     }
 
     case 'delivery_cancel_by_deliverer': {
@@ -751,8 +809,13 @@ export async function handleDeliveryTool(
       if (!textToSend || String(textToSend).trim() === '') {
         return json({ error: 'Parâmetro "message" obrigatório e não pode ser vazio' });
       }
-      const sent = await sendToJid(instance, jid, String(textToSend));
-      return json({ ok: true, sent });
+      const mentionedList = Array.isArray(args.mentionedList)
+        ? (args.mentionedList as string[]).filter(j => j.includes('@'))
+        : undefined;
+      const quotedMessageId = args.quotedMessageId ? String(args.quotedMessageId) : undefined;
+      const sent = await sendToJid(instance, jid, String(textToSend), mentionedList, quotedMessageId);
+      const msgId = extractMessageId(sent);
+      return json({ ok: true, sent, msgId });
     }
 
     case 'delivery_calc_fee': {
@@ -768,12 +831,8 @@ export async function handleDeliveryTool(
         return json({ error: `Restaurante "${restaurant.name}" não tem endereço cadastrado (campo 'address'). Informe originAddress ou cadastre o endereço no documento do restaurante.` });
       }
 
-      // Geocoding + routing em paralelo (geocoding) depois rota
-      const [origin, dest] = await Promise.all([
-        geocode(originAddress),
-        geocode(clientAddress),
-      ]);
-      const distanceKm = await routeDistanceKm(origin, dest);
+      // Google Routes API v2 — aceita endereços diretamente, sem geocoding separado
+      const distanceKm = await computeRouteDistanceKm(originAddress, clientAddress);
 
       // Tabela de preços do negócio
       const bizId = restaurant.businessId as string | undefined;
