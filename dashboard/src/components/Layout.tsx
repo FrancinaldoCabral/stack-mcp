@@ -13,6 +13,7 @@ import {
   WalletOutlined,
   RobotOutlined,
   WhatsAppOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getApiKey, setApiKey } from '../lib/api';
@@ -27,6 +28,7 @@ const menuItems = [
   { key: '/precos', icon: <EuroCircleOutlined />, label: 'Taxas de entrega' },
   { key: '/entregadores', icon: <TeamOutlined />, label: 'Entregadores' },
   { key: '/acertos', icon: <WalletOutlined />, label: 'Acertos' },
+  { key: '/relatorios', icon: <BarChartOutlined />, label: 'Relatórios' },
   { key: '/atendente', icon: <RobotOutlined />, label: 'Atendente virtual' },
   { key: '/whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp' },
   { key: '/manutencao', icon: <ToolOutlined />, label: 'Manutenção' },

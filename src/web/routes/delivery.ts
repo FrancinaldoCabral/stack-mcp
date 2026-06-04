@@ -296,3 +296,165 @@ deliveryRouter.delete('/settlements/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
+
+// ── Entregadores (lista distinta) ─────────────────────────────────────────────
+
+deliveryRouter.get('/deliverers', async (_req, res) => {
+  try {
+    const db = await getDb();
+    const rows = await db.collection('delivery_orders').aggregate([
+      { $match: { delivererJid: { $exists: true, $ne: null } } },
+      { $group: { _id: '$delivererJid', name: { $first: '$delivererName' } } },
+      { $project: { _id: 0, jid: '$_id', name: 1 } },
+      { $sort: { name: 1 } },
+    ]).toArray();
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ── Relatórios ────────────────────────────────────────────────────────────────
+
+// GET /api/delivery/reports/restaurant?restaurantId=&from=YYYY-MM-DD&to=YYYY-MM-DD
+deliveryRouter.get('/reports/restaurant', async (req, res) => {
+  try {
+    const db = await getDb();
+    const restaurantId = String(req.query.restaurantId ?? '').trim();
+    if (!restaurantId) return res.status(400).json({ error: 'restaurantId obrigatório' });
+
+    const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 30 * 86400000);
+    const to = req.query.to ? new Date(String(req.query.to) + 'T23:59:59') : new Date();
+
+    const restaurant = await db.collection('delivery_restaurants').findOne({ _id: new ObjectId(restaurantId) });
+    if (!restaurant) return res.status(404).json({ error: 'Restaurante não encontrado' });
+
+    const orders = await db.collection('delivery_orders').find({
+      restaurantId,
+      status: { $nin: ['rascunho', 'cancelado'] },
+      createdAt: { $gte: from, $lte: to },
+    }).sort({ createdAt: 1 }).toArray();
+
+    // Acertos (settlements) do restaurante no período
+    const settlements = await db.collection('delivery_settlements').find({
+      restaurantId,
+      date: { $gte: from, $lte: to },
+    }).toArray();
+
+    const totalDeliveryFees = orders.reduce((s, o) => s + (Number(o.deliveryFee) || 0), 0);
+    const totalOrderValue = orders.reduce((s, o) => s + (Number(o.value) || 0), 0);
+    const totalRestaurantProfit = totalOrderValue - totalDeliveryFees;
+    const totalSettlements = settlements.reduce((s, st) => s + (Number(st.amount) || 0), 0);
+
+    const orderRows = orders.map(o => {
+      const dt = o.createdAt ? new Date(o.createdAt) : null;
+      const dateStr = dt ? dt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Brussels' }) : '';
+      const timeStr = dt ? dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Brussels' }) : '';
+      const fee = Number(o.deliveryFee) || 0;
+      const val = Number(o.value) || 0;
+      return {
+        _id: String(o._id),
+        orderRef: o.orderRef ?? '',
+        date: dateStr,
+        time: timeStr,
+        clientAddress: o.clientAddress ?? '',
+        commune: o.clientCommune ?? '',
+        distanceKm: o.distanceKm ?? null,
+        orderValue: val,
+        deliveryFee: fee,
+        foodValue: Math.round((val - fee) * 100) / 100,
+        settlementAmount: o.settlementAmount ?? null,
+        delivererName: o.delivererName ?? '',
+        paymentMethod: o.paymentMethod ?? '',
+        externalCode: o.externalCode ?? '',
+        status: o.status,
+      };
+    });
+
+    res.json({
+      restaurant: {
+        _id: String(restaurant._id),
+        name: restaurant.name,
+        address: restaurant.address ?? '',
+      },
+      period: {
+        from: from.toISOString().slice(0, 10),
+        to: to.toISOString().slice(0, 10),
+      },
+      summary: {
+        totalDeliveryFees: Math.round(totalDeliveryFees * 100) / 100,
+        totalSettlementsReceived: Math.round(totalSettlements * 100) / 100,
+        outstandingDebt: Math.round((totalDeliveryFees - totalSettlements) * 100) / 100,
+        totalOrderValue: Math.round(totalOrderValue * 100) / 100,
+        totalRestaurantProfit: Math.round(totalRestaurantProfit * 100) / 100,
+        orderCount: orders.length,
+      },
+      orders: orderRows,
+    });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// GET /api/delivery/reports/deliverer?delivererJid=&from=YYYY-MM-DD&to=YYYY-MM-DD
+deliveryRouter.get('/reports/deliverer', async (req, res) => {
+  try {
+    const db = await getDb();
+    const delivererJid = String(req.query.delivererJid ?? '').trim();
+    const delivererName = String(req.query.delivererName ?? '').trim();
+    if (!delivererJid && !delivererName) return res.status(400).json({ error: 'delivererJid ou delivererName obrigatório' });
+
+    const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 30 * 86400000);
+    const to = req.query.to ? new Date(String(req.query.to) + 'T23:59:59') : new Date();
+
+    const orderFilter: Record<string, unknown> = {
+      status: { $nin: ['rascunho', 'cancelado'] },
+      createdAt: { $gte: from, $lte: to },
+    };
+    if (delivererJid) orderFilter.delivererJid = delivererJid;
+    else orderFilter.delivererName = new RegExp(delivererName, 'i');
+
+    const orders = await db.collection('delivery_orders').find(orderFilter).sort({ createdAt: 1 }).toArray();
+
+    // Acertos recebidos pelo entregador no período
+    const stFilter: Record<string, unknown> = { date: { $gte: from, $lte: to } };
+    if (delivererJid) stFilter.delivererJid = delivererJid;
+    else stFilter.delivererName = new RegExp(delivererName, 'i');
+    const settlements = await db.collection('delivery_settlements').find(stFilter).toArray();
+
+    const totalCommission = orders.reduce((s, o) => s + (Number(o.deliveryFee) || 0), 0);
+    const totalSettlements = settlements.reduce((s, st) => s + (Number(st.amount) || 0), 0);
+
+    const resolvedDelivererName = orders[0]?.delivererName ?? delivererName;
+
+    const orderRows = orders.map(o => {
+      const dt = o.createdAt ? new Date(o.createdAt) : null;
+      const dateStr = dt ? dt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Brussels' }) : '';
+      const timeStr = dt ? dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Brussels' }) : '';
+      return {
+        _id: String(o._id),
+        orderRef: o.orderRef ?? '',
+        date: dateStr,
+        time: timeStr,
+        restaurantName: o.restaurantName ?? '',
+        clientAddress: o.clientAddress ?? '',
+        commune: o.clientCommune ?? '',
+        distanceKm: o.distanceKm ?? null,
+        settlementAmount: o.settlementAmount ?? null,
+        commission: Number(o.deliveryFee) || 0,
+        status: o.status,
+      };
+    });
+
+    res.json({
+      deliverer: { jid: delivererJid, name: resolvedDelivererName },
+      period: {
+        from: from.toISOString().slice(0, 10),
+        to: to.toISOString().slice(0, 10),
+      },
+      summary: {
+        totalCommission: Math.round(totalCommission * 100) / 100,
+        totalSettlementsReceived: Math.round(totalSettlements * 100) / 100,
+        outstandingCredit: Math.round((totalCommission - totalSettlements) * 100) / 100,
+        orderCount: orders.length,
+      },
+      orders: orderRows,
+    });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});

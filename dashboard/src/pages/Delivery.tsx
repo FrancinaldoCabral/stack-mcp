@@ -268,6 +268,7 @@ export function OrdersTab() {
   const [restaurantId, setRestaurantId] = useState('');
   const [status, setStatus] = useState('');
   const [days, setDays] = useState('30');
+  const [search, setSearch] = useState('');
   const [viewing, setViewing] = useState<DeliveryOrder | null>(null);
   const [editing, setEditing] = useState<DeliveryOrder | null>(null);
   const [form] = Form.useForm();
@@ -281,19 +282,24 @@ export function OrdersTab() {
   if (restaurantId) params.restaurantId = restaurantId;
   if (status) params.status = status;
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ['delivery-orders', params],
     queryFn: () => api.getDeliveryOrders(params),
   });
 
-  const orders: DeliveryOrder[] = data?.data ?? [];
+  const allOrders: DeliveryOrder[] = data?.data ?? [];
+  const orders = search
+    ? allOrders.filter(o =>
+        [o.clientName, o.clientAddress, o.orderRef, o.externalCode, o.delivererName, o.restaurantName]
+          .some(f => f && String(f).toLowerCase().includes(search.toLowerCase()))
+      )
+    : allOrders;
 
   const update = useMutation({
     mutationFn: (vals: Partial<DeliveryOrder>) => api.updateDeliveryOrder(editing!._id, vals),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['delivery-orders'] });
-      setEditing(null);
-      form.resetFields();
+      setEditing(null); form.resetFields();
       message.success('Pedido atualizado!');
     },
     onError: (e: Error) => message.error(e.message),
@@ -301,21 +307,23 @@ export function OrdersTab() {
 
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteDeliveryOrder(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['delivery-orders'] });
-      message.success('Pedido removido.');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['delivery-orders'] }); message.success('Pedido removido.'); },
     onError: (e: Error) => message.error(e.message),
   });
 
   const openEdit = (o: DeliveryOrder) => {
+    const itemsStr = Array.isArray(o.items) ? o.items.join('\n') : (o.items ?? '');
     form.setFieldsValue({
       restaurantId: o.restaurantId,
       clientName: o.clientName ?? '',
       clientAddress: o.clientAddress ?? '',
+      clientCommune: o.clientCommune ?? '',
       clientPhone: o.clientPhone ?? '',
-      items: o.items ?? '',
+      items: itemsStr,
       value: o.value ?? null,
+      deliveryFee: o.deliveryFee ?? null,
+      paymentMethod: o.paymentMethod ?? '',
+      externalCode: o.externalCode ?? '',
       delivererName: o.delivererName ?? '',
       delivererJid: o.delivererJid ?? '',
       status: o.status,
@@ -330,50 +338,75 @@ export function OrdersTab() {
     update.mutate(vals);
   });
 
+  const eur = (v: number | undefined | null) =>
+    v != null ? `€${Number(v).toFixed(2)}` : <Text type="secondary">—</Text>;
+
   const cols = [
     {
-      title: '#', dataIndex: 'orderNumber', key: 'num', width: 60,
-      render: (n: number) => n ? <strong>#{n}</strong> : <Text type="secondary">—</Text>,
+      title: 'Ref', key: 'ref', width: 110, fixed: 'left' as const,
+      render: (_: unknown, o: DeliveryOrder) => (
+        <Space direction="vertical" size={0}>
+          {o.orderRef ? <Text strong style={{ fontSize: 11 }}>{o.orderRef}</Text> : <Text type="secondary" style={{ fontSize: 11 }}>—</Text>}
+          {o.externalCode && <Text type="secondary" style={{ fontSize: 10 }}>#{o.externalCode}</Text>}
+        </Space>
+      ),
     },
-    { title: 'Restaurante', dataIndex: 'restaurantName', key: 'rst' },
-    { title: 'Cliente', dataIndex: 'clientName', key: 'cli', render: (v: string) => v || <Text type="secondary">—</Text> },
-    { title: 'Endereço', dataIndex: 'clientAddress', key: 'addr', render: (v: string) => v || <Text type="secondary">—</Text> },
-    { title: 'Itens', dataIndex: 'items', key: 'items', ellipsis: true, render: (v: string) => v || <Text type="secondary">—</Text> },
     {
-      title: 'Valor', dataIndex: 'value', key: 'val',
-      render: (v: number) => v != null ? `R$ ${Number(v).toFixed(2)}` : <Text type="secondary">—</Text>,
+      title: 'Data', dataIndex: 'createdAt', key: 'date', width: 90,
+      render: (d: string) => d ? dayjs(d).format('DD/MM HH:mm') : '—',
     },
-    { title: 'Entregador', dataIndex: 'delivererName', key: 'dlv', render: (v: string) => v || <Text type="secondary">—</Text> },
+    { title: 'Restaurante', dataIndex: 'restaurantName', key: 'rst', width: 120, ellipsis: true },
     {
-      title: 'Status', dataIndex: 'status', key: 'status',
+      title: 'Cliente', key: 'cliente', width: 160, ellipsis: true,
+      render: (_: unknown, o: DeliveryOrder) => (
+        <Space direction="vertical" size={0}>
+          <Text>{o.clientName || <Text type="secondary">—</Text>}</Text>
+          {o.clientAddress && <Text type="secondary" style={{ fontSize: 11 }}>{o.clientAddress}</Text>}
+        </Space>
+      ),
+    },
+    {
+      title: 'Itens', dataIndex: 'items', key: 'items', width: 140, ellipsis: true,
+      render: (v: string | string[]) => {
+        const txt = Array.isArray(v) ? v.join(', ') : v;
+        return txt ? <Text style={{ fontSize: 12 }}>{txt}</Text> : <Text type="secondary">—</Text>;
+      },
+    },
+    {
+      title: 'Pedido', key: 'valores', width: 120,
+      render: (_: unknown, o: DeliveryOrder) => (
+        <Space direction="vertical" size={0}>
+          {o.value != null && <Text strong>€{Number(o.value).toFixed(2)}</Text>}
+          {o.deliveryFee != null && <Text type="secondary" style={{ fontSize: 11 }}>Taxa: €{Number(o.deliveryFee).toFixed(2)}</Text>}
+          {o.paymentMethod && <Text type="secondary" style={{ fontSize: 10 }}>{o.paymentMethod}</Text>}
+        </Space>
+      ),
+    },
+    { title: 'Entregador', dataIndex: 'delivererName', key: 'dlv', width: 100, render: (v: string) => v || <Text type="secondary">—</Text> },
+    {
+      title: 'Status', dataIndex: 'status', key: 'status', width: 110,
       render: (s: string) => {
         const cfg = ORDER_STATUS[s] ?? { color: 'default', label: s };
         return <Tag color={cfg.color}>{cfg.label}</Tag>;
       },
     },
     {
-      title: 'Acerto', dataIndex: 'settlement', key: 'settlement',
+      title: 'Acerto', dataIndex: 'settlement', key: 'settlement', width: 85,
       render: (s: string) => {
-        if (!s || s === 'pendente') return <Tag color="orange">Pendente</Tag>;
-        if (s === 'acertado') return <Tag color="green">Acertado</Tag>;
-        return <Tag color="red">Sem Acertar</Tag>;
+        if (!s || s === 'pendente') return <Tag color="orange" style={{ fontSize: 11 }}>Pendente</Tag>;
+        if (s === 'acertado') return <Tag color="green" style={{ fontSize: 11 }}>Acertado</Tag>;
+        return <Tag color="red" style={{ fontSize: 11 }}>Sem Acertar</Tag>;
       },
     },
     {
-      title: 'Data', dataIndex: 'createdAt', key: 'date',
-      render: (d: string) => d ? dayjs(d).format('DD/MM HH:mm') : '—',
-    },
-    {
-      title: 'Ações', key: 'actions', width: 170, fixed: 'right' as const,
+      title: '', key: 'actions', width: 120, fixed: 'right' as const,
       render: (_: unknown, o: DeliveryOrder) => (
         <Space size="small">
           <Button size="small" onClick={() => setViewing(o)}>Ver</Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(o)} />
           <Popconfirm
             title="Remover este pedido?"
-            description="Esta ação não pode ser desfeita."
-            okText="Sim, remover"
-            cancelText="Cancelar"
+            okText="Sim" cancelText="Não"
             okButtonProps={{ danger: true }}
             onConfirm={() => remove.mutate(o._id)}
           >
@@ -386,11 +419,18 @@ export function OrdersTab() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input.Search
+          placeholder="Buscar cliente, ref, entregador..."
+          allowClear
+          style={{ width: 240 }}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
         <Select
           placeholder="Todos restaurantes"
           allowClear
-          style={{ width: 200 }}
+          style={{ width: 180 }}
           value={restaurantId || undefined}
           onChange={v => setRestaurantId(v ?? '')}
           options={(restaurants as DeliveryRestaurant[]).map(r => ({ value: r._id, label: r.name }))}
@@ -398,7 +438,7 @@ export function OrdersTab() {
         <Select
           placeholder="Todos status"
           allowClear
-          style={{ width: 160 }}
+          style={{ width: 140 }}
           value={status || undefined}
           onChange={v => setStatus(v ?? '')}
           options={Object.entries(ORDER_STATUS).map(([k, v]) => ({ value: k, label: v.label }))}
@@ -406,10 +446,11 @@ export function OrdersTab() {
         <Select
           value={days}
           onChange={setDays}
-          style={{ width: 160 }}
+          style={{ width: 150 }}
           options={DAYS_OPTIONS}
         />
-        <Text type="secondary">{data?.total ?? 0} pedidos</Text>
+        <Text type="secondary">{orders.length}/{data?.total ?? 0} pedidos</Text>
+        <Button size="small" onClick={() => refetch()}>Atualizar</Button>
       </Space>
 
       <Table
@@ -418,33 +459,34 @@ export function OrdersTab() {
         columns={cols}
         loading={isLoading}
         size="small"
-        scroll={{ x: 1100 }}
-        pagination={{ pageSize: 50 }}
+        scroll={{ x: 1000 }}
+        pagination={{ pageSize: 50, showSizeChanger: true, showTotal: t => `${t} pedidos` }}
       />
 
       {/* Modal de visualização */}
       <Modal
-        title={viewing ? `Pedido${viewing.orderNumber ? ` #${viewing.orderNumber}` : ''}` : ''}
+        title={viewing ? `Pedido ${viewing.orderRef ?? ''}` : ''}
         open={!!viewing}
         onCancel={() => setViewing(null)}
         footer={[
           <Button key="close" onClick={() => setViewing(null)}>Fechar</Button>,
-          viewing && (
-            <Button key="edit" type="primary" icon={<EditOutlined />} onClick={() => { openEdit(viewing); setViewing(null); }}>
-              Editar
-            </Button>
-          ),
+          viewing && <Button key="edit" type="primary" icon={<EditOutlined />} onClick={() => { openEdit(viewing); setViewing(null); }}>Editar</Button>,
         ]}
-        width={560}
+        width={600}
       >
         {viewing && (
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px 12px', marginTop: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '8px 12px', marginTop: 12 }}>
+            <Text type="secondary">Ref:</Text><Text strong>{viewing.orderRef ?? '—'}</Text>
+            {viewing.externalCode && <><Text type="secondary">Código ext.:</Text><Text>#{viewing.externalCode}</Text></>}
             <Text type="secondary">Restaurante:</Text><Text>{viewing.restaurantName}</Text>
             <Text type="secondary">Cliente:</Text><Text>{viewing.clientName ?? '—'}</Text>
             <Text type="secondary">Telefone:</Text><Text>{viewing.clientPhone ?? '—'}</Text>
-            <Text type="secondary">Endereço:</Text><Text>{viewing.clientAddress ?? '—'}</Text>
-            <Text type="secondary">Itens:</Text><Text>{viewing.items ?? '—'}</Text>
-            <Text type="secondary">Valor:</Text><Text>{viewing.value != null ? `R$ ${Number(viewing.value).toFixed(2)}` : '—'}</Text>
+            <Text type="secondary">Endereço:</Text><Text>{viewing.clientAddress ?? '—'}{viewing.clientCommune ? ` — ${viewing.clientCommune}` : ''}</Text>
+            <Text type="secondary">Itens:</Text>
+            <Text>{Array.isArray(viewing.items) ? viewing.items.join(', ') : (viewing.items ?? '—')}</Text>
+            <Text type="secondary">Valor pedido:</Text><Text strong>{eur(viewing.value)}</Text>
+            <Text type="secondary">Taxa entrega:</Text><Text>{eur(viewing.deliveryFee)}</Text>
+            <Text type="secondary">Pagamento:</Text><Text>{viewing.paymentMethod ?? '—'}</Text>
             <Text type="secondary">Entregador:</Text><Text>{viewing.delivererName ?? '—'}</Text>
             <Text type="secondary">JID entregador:</Text><Text code style={{ fontSize: 11 }}>{viewing.delivererJid ?? '—'}</Text>
             <Text type="secondary">Status:</Text>
@@ -457,13 +499,13 @@ export function OrdersTab() {
 
       {/* Modal de edição */}
       <Modal
-        title={editing ? `Editar pedido${editing.orderNumber ? ` #${editing.orderNumber}` : ''}` : ''}
+        title={editing ? `Editar pedido ${editing.orderRef ?? ''}` : ''}
         open={!!editing}
         onOk={submitEdit}
         onCancel={() => { setEditing(null); form.resetFields(); }}
         okText="Salvar"
         confirmLoading={update.isPending}
-        width={620}
+        width={660}
         destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
@@ -478,15 +520,25 @@ export function OrdersTab() {
             <Form.Item name="clientName" label="Nome do cliente"><Input /></Form.Item>
             <Form.Item name="clientPhone" label="Telefone"><Input /></Form.Item>
           </div>
-          <Form.Item name="clientAddress" label="Endereço"><Input /></Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="clientAddress" label="Endereço"><Input /></Form.Item>
+            <Form.Item name="clientCommune" label="Município/Bairro"><Input placeholder="ex: Ixelles" /></Form.Item>
+          </div>
           <Form.Item name="items" label="Itens"><Input.TextArea rows={2} /></Form.Item>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
-            <Form.Item name="value" label="Valor (R$)">
-              <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 12px' }}>
+            <Form.Item name="value" label="Valor pedido (€)">
+              <InputNumber min={0} step={0.01} style={{ width: '100%' }} prefix="€" />
             </Form.Item>
+            <Form.Item name="deliveryFee" label="Taxa entrega (€)">
+              <InputNumber min={0} step={0.01} style={{ width: '100%' }} prefix="€" />
+            </Form.Item>
+            <Form.Item name="paymentMethod" label="Pagamento"><Input placeholder="ex: Dinheiro, MB Way" /></Form.Item>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="externalCode" label="Código externo"><Input placeholder="ex: 2001" /></Form.Item>
             <Form.Item name="delivererName" label="Entregador"><Input /></Form.Item>
           </div>
-          <Form.Item name="delivererJid" label="JID do entregador" extra="ex: 5511999999999@s.whatsapp.net"><Input /></Form.Item>
+          <Form.Item name="delivererJid" label="JID do entregador" extra="ex: 3519xxxxxxxx@s.whatsapp.net"><Input /></Form.Item>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
             <Form.Item name="status" label="Status" rules={[{ required: true }]}>
               <Select options={Object.entries(ORDER_STATUS).map(([k, v]) => ({ value: k, label: v.label }))} />

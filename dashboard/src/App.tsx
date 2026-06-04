@@ -10,6 +10,7 @@ import Entregadores from './pages/Entregadores';
 import Atendente from './pages/Atendente';
 import Whatsapp from './pages/Whatsapp';
 import Maintenance from './pages/Maintenance';
+import Relatorios from './pages/Relatorios';
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
             <Route path="/precos" element={<Precos />} />
             <Route path="/entregadores" element={<Entregadores />} />
             <Route path="/acertos" element={<Acertos />} />
+            <Route path="/relatorios" element={<Relatorios />} />
             <Route path="/atendente" element={<Atendente />} />
             <Route path="/whatsapp" element={<Whatsapp />} />
             <Route path="/manutencao" element={<Maintenance />} />

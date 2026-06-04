@@ -153,6 +153,20 @@ export const api = {
   deleteDeliverySettlement: (id: string) =>
     req<{ ok: boolean }>(`/delivery/settlements/${id}`, { method: 'DELETE' }),
 
+  // Relatórios
+  getRestaurantReport: (params: Record<string, string>) => {
+    const q = '?' + new URLSearchParams(params).toString();
+    return req<import('./types').RestaurantReport>(`/delivery/reports/restaurant${q}`);
+  },
+  getDelivererReport: (params: Record<string, string>) => {
+    const q = '?' + new URLSearchParams(params).toString();
+    return req<import('./types').DelivererReport>(`/delivery/reports/deliverer${q}`);
+  },
+
+  // Deliverers (list from orders)
+  getDeliverers: () =>
+    req<{ jid: string; name: string }[]>('/delivery/deliverers'),
+
   // Manutenção — limpeza de conversas
   clearContactConversations: (phone: string, instance?: string) => {
     const q = instance ? `?instance=${encodeURIComponent(instance)}` : '';

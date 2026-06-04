@@ -134,20 +134,84 @@ export interface DeliveryRestaurant {
 
 export interface DeliveryOrder {
   _id: string;
+  orderRef?: string;
+  externalCode?: string;
   restaurantId: string;
   restaurantName: string;
   orderNumber?: number;
   clientName?: string;
   clientAddress?: string;
+  clientCommune?: string;
   clientPhone?: string;
-  items?: string;
+  items?: string | string[];
   value?: number;
+  deliveryFee?: number;
+  paymentMethod?: string;
   delivererJid?: string;
   delivererName?: string;
-  status: 'pendente' | 'atribuido' | 'a_caminho' | 'no_restaurante' | 'saindo' | 'no_cliente' | 'entregue' | 'problema';
+  status: 'rascunho' | 'pendente' | 'atribuido' | 'aceito' | 'a_caminho' | 'no_restaurante' | 'saindo' | 'no_cliente' | 'entregue' | 'problema' | 'cancelado';
   settlement?: 'acertado' | 'sem_acertar' | 'pendente';
   timestamps?: Record<string, string>;
   createdAt: string;
+  updatedAt?: string;
+}
+
+export interface RestaurantReportOrder {
+  _id: string;
+  orderRef: string;
+  date: string;
+  time: string;
+  clientAddress: string;
+  commune: string;
+  distanceKm: number | null;
+  orderValue: number;
+  deliveryFee: number;
+  foodValue: number;
+  settlementAmount: number | null;
+  delivererName: string;
+  paymentMethod: string;
+  externalCode: string;
+  status: string;
+}
+
+export interface RestaurantReport {
+  restaurant: { _id: string; name: string; address: string };
+  period: { from: string; to: string };
+  summary: {
+    totalDeliveryFees: number;
+    totalSettlementsReceived: number;
+    outstandingDebt: number;
+    totalOrderValue: number;
+    totalRestaurantProfit: number;
+    orderCount: number;
+  };
+  orders: RestaurantReportOrder[];
+}
+
+export interface DelivererReportOrder {
+  _id: string;
+  orderRef: string;
+  date: string;
+  time: string;
+  restaurantName: string;
+  clientAddress: string;
+  commune: string;
+  distanceKm: number | null;
+  settlementAmount: number | null;
+  commission: number;
+  status: string;
+}
+
+export interface DelivererReport {
+  deliverer: { jid: string; name: string };
+  period: { from: string; to: string };
+  summary: {
+    totalCommission: number;
+    totalSettlementsReceived: number;
+    outstandingCredit: number;
+    orderCount: number;
+  };
+  orders: DelivererReportOrder[];
 }
 
 export interface DeliverySettlement {

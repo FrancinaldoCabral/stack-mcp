@@ -56,7 +56,6 @@ function genOrderRef(): string {
 function formatOrderSummary(order: WithId<Document>): string {
   const lines: string[] = [];
   lines.push(`*Pedido ${order.orderRef ?? order._id}*`);
-  // Código externo de plataforma (iFood, Uber Eats, etc.) — se informado pelo restaurante
   if (order.externalCode) lines.push(`Código: ${order.externalCode}`);
   if (order.clientName) lines.push(`Cliente: ${order.clientName}`);
   if (order.clientAddress) lines.push(`Endereço: ${order.clientAddress}`);
@@ -64,7 +63,8 @@ function formatOrderSummary(order: WithId<Document>): string {
   if (Array.isArray(order.items) && order.items.length) {
     lines.push(`Itens:\n${order.items.map((it: unknown) => `  • ${String(it)}`).join('\n')}`);
   }
-  if (order.value != null) lines.push(`Valor: R$ ${Number(order.value).toFixed(2)}`);
+  if (order.value != null) lines.push(`Valor pedido: €${Number(order.value).toFixed(2)}`);
+  if (order.deliveryFee != null) lines.push(`Taxa de entrega: €${Number(order.deliveryFee).toFixed(2)}`);
   if (order.paymentMethod) lines.push(`Pagamento: ${order.paymentMethod}`);
   if (order.notes) lines.push(`Obs: ${order.notes}`);
   if (order.status) lines.push(`Status: ${order.status}`);
@@ -97,7 +97,7 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_draft_order',
-    description: 'Cria um pedido em rascunho a partir das informações capturadas do entregador. NÃO posta no grupo ainda — usa-se delivery_confirm_order para liberar.',
+    description: 'Cria ou atualiza o rascunho de pedido para o restaurante (upsert — se já existe um rascunho aberto, ele é atualizado em vez de duplicar). NÃO posta no grupo ainda — usa delivery_confirm_order para liberar.',
     inputSchema: {
       type: 'object',
       required: ['restaurantId'],
@@ -107,16 +107,18 @@ export const deliveryTools: Tool[] = [
         clientAddress: { type: 'string' },
         clientPhone: { type: 'string' },
         items: { type: 'array', items: { type: 'string' }, description: 'Lista de itens do pedido em texto livre' },
-        value: { type: 'number', description: 'Valor do pedido em R$' },
-        paymentMethod: { type: 'string', description: 'Forma de pagamento (ex: dinheiro, cartão na entrega, pix/online)' },
-        externalCode: { type: 'string', description: 'Código da comanda na plataforma de origem (iFood, Uber Eats, etc.) — preencher SOMENTE se o restaurante informou explicitamente' },
+        value: { type: 'number', description: 'Valor do pedido em €' },
+        deliveryFee: { type: 'number', description: 'Taxa de entrega em € (use delivery_calc_fee para calcular ou preencha se já souber)' },
+        paymentMethod: { type: 'string', description: 'Forma de pagamento (ex: dinheiro, cartão na entrega, MB Way, Multibanco)' },
+        externalCode: { type: 'string', description: 'Código da comanda na plataforma de origem — preencher SOMENTE se o restaurante informou explicitamente' },
+        commune: { type: 'string', description: 'Município/bairro do cliente (ex: Ixelles, Uccle, Bruxelles)' },
         notes: { type: 'string', description: 'Observações livres' },
       },
     },
   },
   {
     name: 'delivery_update_draft',
-    description: 'Atualiza campos de um pedido em rascunho. Não funciona em pedidos já confirmados (use delivery_update_order).',
+    description: 'Atualiza campos de um pedido em rascunho. Não funciona em pedidos já confirmados (use delivery_update_order_status).',
     inputSchema: {
       type: 'object',
       required: ['orderId'],
@@ -126,9 +128,11 @@ export const deliveryTools: Tool[] = [
         clientAddress: { type: 'string' },
         clientPhone: { type: 'string' },
         items: { type: 'array', items: { type: 'string' } },
-        value: { type: 'number' },
+        value: { type: 'number', description: 'Valor do pedido em €' },
+        deliveryFee: { type: 'number', description: 'Taxa de entrega em €' },
         paymentMethod: { type: 'string' },
-        externalCode: { type: 'string', description: 'Código externo da plataforma (iFood, Uber Eats, etc.) — somente se informado' },
+        externalCode: { type: 'string', description: 'Código externo da plataforma — somente se informado' },
+        commune: { type: 'string', description: 'Município/bairro do cliente' },
         notes: { type: 'string' },
       },
     },
@@ -264,14 +268,15 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_calc_fee',
-    description: 'Calcula a distância de rota (em km) do restaurante até o endereço do cliente e retorna a taxa de entrega segundo a tabela de preços configurada para o negócio (business.settings.deliveryFeeTable). Usa Nominatim (OSM) para geocoding e OSRM público para roteamento — sem necessidade de chave de API.',
+    description: 'Calcula distância e taxa de entrega (€) do restaurante até o cliente via tabela de preços configurada. Se orderId for fornecido, salva automaticamente a taxa no pedido. Usa Nominatim + OSRM — sem chave de API.',
     inputSchema: {
       type: 'object',
       required: ['restaurantId', 'clientAddress'],
       properties: {
-        restaurantId: { type: 'string', description: 'ID do restaurante de origem (delivery_restaurants._id)' },
-        clientAddress: { type: 'string', description: 'Endereço completo de entrega (rua, número, cidade)' },
+        restaurantId: { type: 'string', description: 'ID do restaurante de origem' },
+        clientAddress: { type: 'string', description: 'Endereço completo de entrega (rua, número, cidade, país)' },
         originAddress: { type: 'string', description: 'Sobrepõe o endereço cadastrado do restaurante (opcional)' },
+        orderId: { type: 'string', description: 'Se informado, salva a taxa calculada no pedido automaticamente' },
       },
     },
   },
@@ -329,6 +334,26 @@ export async function handleDeliveryTool(
       if (!r) return json({ error: 'Restaurante não encontrado' });
       const now = new Date();
       const status = name === 'delivery_draft_order' ? 'rascunho' : 'pendente';
+
+      if (name === 'delivery_draft_order') {
+        // Upsert: se já existe um rascunho aberto para este restaurante, atualiza em vez de criar
+        const existing = await db.collection('delivery_orders').findOne(
+          { restaurantId: String(r._id), status: 'rascunho' },
+          { sort: { createdAt: -1 } },
+        );
+        if (existing) {
+          const PATCHABLE = ['clientName', 'clientAddress', 'clientPhone', 'items', 'value', 'deliveryFee', 'paymentMethod', 'externalCode', 'notes'];
+          const upd: Record<string, unknown> = { updatedAt: now };
+          for (const k of PATCHABLE) if (args[k] !== undefined) upd[k] = args[k];
+          const updated = await db.collection('delivery_orders').findOneAndUpdate(
+            { _id: existing._id },
+            { $set: upd },
+            { returnDocument: 'after' },
+          );
+          return json({ ok: true, orderId: updated!._id, orderRef: updated!.orderRef, status: 'rascunho', updated: true });
+        }
+      }
+
       const doc: Record<string, unknown> = {
         orderRef: genOrderRef(),
         restaurantId: String(r._id),
@@ -336,9 +361,11 @@ export async function handleDeliveryTool(
         businessId: r.businessId ?? null,
         clientName: args.clientName ?? '',
         clientAddress: args.clientAddress ?? '',
+        clientCommune: args.commune ?? '',
         clientPhone: args.clientPhone ?? '',
         items: Array.isArray(args.items) ? args.items : [],
         value: args.value != null ? Number(args.value) : null,
+        deliveryFee: args.deliveryFee != null ? Number(args.deliveryFee) : null,
         paymentMethod: args.paymentMethod ?? null,
         externalCode: args.externalCode ?? null,
         notes: args.notes ?? '',
@@ -359,9 +386,10 @@ export async function handleDeliveryTool(
       if (current.status !== 'rascunho') {
         return json({ error: `Pedido não está em rascunho (status atual: ${current.status}). Use delivery_update_order_status.` });
       }
-      const PATCHABLE = ['clientName', 'clientAddress', 'clientPhone', 'items', 'value', 'paymentMethod', 'externalCode', 'notes'];
+      const PATCHABLE = ['clientName', 'clientAddress', 'clientPhone', 'items', 'value', 'deliveryFee', 'paymentMethod', 'externalCode', 'notes'];
       const update: Record<string, unknown> = { updatedAt: new Date() };
       for (const k of PATCHABLE) if (args[k] !== undefined) update[k] = args[k];
+      if (args.commune !== undefined) update.clientCommune = args.commune;
       const result = await db.collection('delivery_orders').findOneAndUpdate(
         { _id: id }, { $set: update }, { returnDocument: 'after' },
       );
@@ -536,15 +564,28 @@ export async function handleDeliveryTool(
       }
 
       const band = table.find(b => distanceKm >= b.minKm && distanceKm <= b.maxKm);
+      const feeEur = band?.feeEur ?? null;
+
+      // Se orderId fornecido, salva a taxa no pedido
+      if (args.orderId && feeEur != null) {
+        try {
+          await db.collection('delivery_orders').updateOne(
+            { _id: new ObjectId(String(args.orderId)) },
+            { $set: { deliveryFee: feeEur, updatedAt: new Date() } },
+          );
+        } catch { /* best-effort — não bloqueia */ }
+      }
+
       return json({
         restaurantName: restaurant.name,
         originAddress,
         clientAddress,
         distanceKm: Math.round(distanceKm * 10) / 10,
-        feeEur: band?.feeEur ?? null,
+        feeEur,
         band: band ? `${band.minKm}–${band.maxKm} km` : null,
         outOfRange: !band,
         maxKmTabela: Math.max(...table.map(b => b.maxKm)),
+        savedToOrder: !!(args.orderId && feeEur != null),
       });
     }
 
