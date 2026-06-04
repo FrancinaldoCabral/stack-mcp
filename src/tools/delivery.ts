@@ -744,7 +744,7 @@ export async function handleDeliveryTool(
           // Re-posta no grupo de entregadores
           if (r.delivererGroupJid) {
             const dlvGrp = String(r.delivererGroupJid).trim();
-            const orderText = `🔄 Pedido *${released.orderRef}* disponível novamente!\n\n${formatOrderSummary(released)}\n\nQuem aceita? Responda esta mensagem.`;
+            const orderText = `🔄 Pedido *${released.orderRef}* disponível novamente!\n\n${formatOrderSummary(released)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
             await sendToJid(instance, dlvGrp, orderText);
           }
         }
@@ -806,17 +806,23 @@ export async function handleDeliveryTool(
         : String(r.delivererGroupJid ?? '').trim();
       if (!jid) return json({ error: 'JID destino não configurado no restaurante' });
       const instance = await getRestaurantInstance(r);
-      const textToSend = args.message ?? args.text;
-      if (!textToSend || String(textToSend).trim() === '') {
-        return json({ error: 'Parâmetro "message" obrigatório e não pode ser vazio' });
-      }
-      const mentionedList = Array.isArray(args.mentionedList)
-        ? (args.mentionedList as string[]).filter(j => j.includes('@'))
-        : undefined;
+      const textToSend = String(args.message ?? args.text ?? '').trim();
+      if (!textToSend) return json({ error: 'Parâmetro "message" obrigatório e não pode ser vazio' });
+
+      // Constrói mentionedList combinando o que o agente passou + o que está no texto.
+      // Auto-detecta padrões @NUMERO no texto e adiciona como JID @s.whatsapp.net.
+      // Isso garante que o WhatsApp entregue a notificação mesmo com grupo no silencioso.
+      const explicitMentions = Array.isArray(args.mentionedList)
+        ? (args.mentionedList as string[]).filter(j => typeof j === 'string' && j.includes('@'))
+        : [];
+      const autoMentions = [...textToSend.matchAll(/@(\d{7,15})/g)]
+        .map(m => `${m[1]}@s.whatsapp.net`);
+      const allMentions = Array.from(new Set([...explicitMentions, ...autoMentions]));
+
       const quotedMessageId = args.quotedMessageId ? String(args.quotedMessageId) : undefined;
-      const sent = await sendToJid(instance, jid, String(textToSend), mentionedList, quotedMessageId);
+      const sent = await sendToJid(instance, jid, textToSend, allMentions.length ? allMentions : undefined, quotedMessageId);
       const msgId = extractMessageId(sent);
-      return json({ ok: true, sent, msgId });
+      return json({ ok: true, sent, msgId, mentionedList: allMentions });
     }
 
     case 'delivery_calc_fee': {
