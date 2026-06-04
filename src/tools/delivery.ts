@@ -612,11 +612,15 @@ export async function handleDeliveryTool(
     }
 
     case 'delivery_update_order_status': {
-      const id = new ObjectId(String(args.orderId));
+      const rawStatusId = String(args.orderId);
+      // Aceita orderRef (LT-XXXX) ou MongoDB ObjectId (24 hex)
+      const statusOrderFilter = ObjectId.isValid(rawStatusId) && rawStatusId.length === 24
+        ? { _id: new ObjectId(rawStatusId) }
+        : { orderRef: rawStatusId };
       const status = String(args.status);
       const note = args.note ? String(args.note) : '';
       const order = await db.collection('delivery_orders').findOneAndUpdate(
-        { _id: id },
+        statusOrderFilter,
         { $set: { status, ...(note ? { lastNote: note } : {}), updatedAt: new Date() } },
         { returnDocument: 'after' },
       );
