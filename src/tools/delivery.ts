@@ -38,11 +38,17 @@ async function getRestaurantInstance(restaurant: WithId<Document>): Promise<stri
   return inst;
 }
 
-async function sendToJid(instance: string, jid: string, text: string): Promise<unknown> {
+async function sendToJid(
+  instance: string,
+  jid: string,
+  text: string,
+  mentionedList?: string[],
+): Promise<unknown> {
   const http = evolution();
+  const body: Record<string, unknown> = { number: jid, text, delay: 500 };
+  if (mentionedList?.length) body.mentionedList = mentionedList;
   return safeRequest(() =>
-    http.post(`/message/sendText/${instance}`, { number: jid, text, delay: 500 })
-      .then(r => r.data)
+    http.post(`/message/sendText/${instance}`, body).then(r => r.data)
   );
 }
 
@@ -186,7 +192,7 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_assign_deliverer',
-    description: 'Atribui um entregador a um pedido e opcionalmente registra ETA. Envia notificação automática ao grupo de comandos do restaurante — NÃO chame delivery_post_to_command_group depois desta ferramenta.',
+    description: 'Atribui um entregador a um pedido (somente se ainda sem entregador — controle de concorrência). Notifica automaticamente o grupo de comandos. Se o pedido já foi aceito por outro entregador, retorna {ok:false, alreadyTaken:true}.',
     inputSchema: {
       type: 'object',
       required: ['orderId', 'delivererJid', 'delivererName'],
@@ -195,6 +201,19 @@ export const deliveryTools: Tool[] = [
         delivererJid: { type: 'string' },
         delivererName: { type: 'string' },
         etaMin: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'delivery_cancel_by_deliverer',
+    description: 'Entregador cancela/desiste de um pedido. O pedido volta a status pendente e é re-postado no grupo para outro entregador assumir. Use quando o entregador explicitamente desiste.',
+    inputSchema: {
+      type: 'object',
+      required: ['orderId', 'delivererJid'],
+      properties: {
+        orderId: { type: 'string' },
+        delivererJid: { type: 'string', description: 'JID do entregador que está cancelando (deve ser o entregador atual)' },
+        reason: { type: 'string', description: 'Motivo do cancelamento (opcional)' },
       },
     },
   },
@@ -417,13 +436,30 @@ export async function handleDeliveryTool(
         { returnDocument: 'after' },
       );
       if (!order) return json({ error: 'Pedido não encontrado' });
+
+      const r = await getRestaurant(String(order.restaurantId));
+      if (!r) return json({ ok: true, order, warning: 'Restaurante não encontrado' });
+      const instance = await getRestaurantInstance(r);
+
+      // Quando o restaurante cancela um pedido com entregador atribuído:
+      // notifica o entregador no grupo de entregadores com @menção
+      if (status === 'cancelado' && order.delivererJid) {
+        try {
+          const dlvGrp = String(r.delivererGroupJid ?? '').trim();
+          if (dlvGrp) {
+            const dlvJid = String(order.delivererJid);
+            const dlvName = String(order.delivererName ?? 'entregador');
+            const phone = dlvJid.replace('@s.whatsapp.net', '');
+            const cancelText = `❌ Pedido *${order.orderRef}* foi CANCELADO pelo restaurante.\n@${phone}, o pedido foi cancelado${note ? `: ${note}` : '.'}`;
+            await sendToJid(instance, dlvGrp, cancelText, [dlvJid]);
+          }
+        } catch { /* best-effort */ }
+      }
+
       const notify = args.notifyCommandGroup !== false;
       if (!notify) return json({ ok: true, order });
-      const r = await getRestaurant(String(order.restaurantId));
-      if (!r) return json({ ok: true, order, warning: 'Restaurante não encontrado para espelhamento' });
       const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
       if (!cmdJid) return json({ ok: true, order, warning: 'Restaurante sem commandJid' });
-      const instance = await getRestaurantInstance(r);
       const text = `📦 Pedido *${order.orderRef ?? order._id}* — status: *${status}*${note ? `\n${note}` : ''}`;
       const sent = await sendToJid(instance, cmdJid, text);
       return json({ ok: true, order, sent });
@@ -431,18 +467,44 @@ export async function handleDeliveryTool(
 
     case 'delivery_assign_deliverer': {
       const id = new ObjectId(String(args.orderId));
-      const update: Record<string, unknown> = {
-        delivererJid: String(args.delivererJid),
+      const newDelivererJid = String(args.delivererJid);
+
+      const upd: Record<string, unknown> = {
+        delivererJid: newDelivererJid,
         delivererName: String(args.delivererName),
+        status: 'aceito',
         updatedAt: new Date(),
       };
-      if (args.etaMin != null) update.etaMin = Number(args.etaMin);
+      if (args.etaMin != null) upd.etaMin = Number(args.etaMin);
+
+      // Atribuição atômica: só sucede se o pedido ainda não tem entregador
+      // (ou o mesmo entregador está re-confirmando sua atribuição)
       const result = await db.collection('delivery_orders').findOneAndUpdate(
-        { _id: id }, { $set: update }, { returnDocument: 'after' },
+        {
+          _id: id,
+          $or: [
+            { delivererJid: { $in: [null, undefined, '', newDelivererJid] } },
+            { delivererJid: { $exists: false } },
+            { status: 'pendente' },
+          ],
+        },
+        { $set: upd },
+        { returnDocument: 'after' },
       );
-      if (!result) return json({ error: 'Pedido não encontrado' });
-      // Notifica automaticamente o grupo de comandos do restaurante — elimina a necessidade
-      // de o LLM chamar delivery_post_to_command_group separadamente após a atribuição.
+
+      if (!result) {
+        // Pedido já foi aceito por outro entregador
+        const current = await db.collection('delivery_orders').findOne({ _id: id });
+        return json({
+          ok: false,
+          alreadyTaken: true,
+          orderRef: current?.orderRef ?? '',
+          currentDelivererName: current?.delivererName ?? '',
+          message: `Pedido ${current?.orderRef} já foi aceito por ${current?.delivererName}. Aguarde o próximo!`,
+        });
+      }
+
+      // Notifica grupo de comandos do restaurante
       try {
         const r = await getRestaurant(String(result.restaurantId));
         if (r) {
@@ -454,8 +516,58 @@ export async function handleDeliveryTool(
             await sendToJid(instance, cmdJid, notifText);
           }
         }
-      } catch { /* não bloqueia — notificação é best-effort */ }
+      } catch { /* best-effort */ }
       return json({ ok: true, order: result, notified: true });
+    }
+
+    case 'delivery_cancel_by_deliverer': {
+      const id = new ObjectId(String(args.orderId));
+      const delivererJid = String(args.delivererJid);
+
+      const current = await db.collection('delivery_orders').findOne({ _id: id });
+      if (!current) return json({ error: 'Pedido não encontrado' });
+
+      // Verifica se o entregador que está cancelando é o atribuído
+      if (current.delivererJid && current.delivererJid !== delivererJid) {
+        return json({ error: 'Apenas o entregador atribuído pode cancelar este pedido', currentDelivererJid: current.delivererJid });
+      }
+
+      // Volta ao status pendente, remove entregador
+      const released = await db.collection('delivery_orders').findOneAndUpdate(
+        { _id: id },
+        {
+          $set: {
+            status: 'pendente',
+            delivererJid: null,
+            delivererName: null,
+            etaMin: null,
+            cancelReason: args.reason ? String(args.reason) : 'Cancelado pelo entregador',
+            updatedAt: new Date(),
+          },
+        },
+        { returnDocument: 'after' },
+      );
+      if (!released) return json({ error: 'Falha ao cancelar pedido' });
+
+      // Notifica grupo de comandos do restaurante
+      try {
+        const r = await getRestaurant(String(released.restaurantId));
+        if (r) {
+          const instance = await getRestaurantInstance(r);
+          const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
+          if (cmdJid) {
+            await sendToJid(instance, cmdJid, `⚠️ Entregador *${current.delivererName}* cancelou o pedido *${released.orderRef}*. Procurando novo entregador.`);
+          }
+          // Re-posta no grupo de entregadores
+          if (r.delivererGroupJid) {
+            const dlvGrp = String(r.delivererGroupJid).trim();
+            const orderText = `🔄 Pedido *${released.orderRef}* disponível novamente!\n\n${formatOrderSummary(released)}\n\nQuem aceita? Responda esta mensagem.`;
+            await sendToJid(instance, dlvGrp, orderText);
+          }
+        }
+      } catch { /* best-effort */ }
+
+      return json({ ok: true, orderRef: released.orderRef, status: 'pendente', reposted: true });
     }
 
     case 'delivery_list_orders': {
