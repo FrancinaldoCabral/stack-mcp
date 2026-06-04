@@ -238,25 +238,27 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_post_to_command_group',
-    description: 'Envia mensagem ao grupo (ou contato) de comandos do restaurante. Use para espelhar comunicações importantes do entregador para o restaurante.',
+    description: 'Envia mensagem ao grupo (ou contato) de comandos do restaurante. Use para espelhar comunicações importantes do entregador para o restaurante. Use o parâmetro "message" com o texto a enviar.',
     inputSchema: {
       type: 'object',
-      required: ['restaurantId', 'text'],
+      required: ['restaurantId', 'message'],
       properties: {
         restaurantId: { type: 'string' },
-        text: { type: 'string' },
+        message: { type: 'string', description: 'Texto da mensagem a enviar ao grupo' },
+        text: { type: 'string', description: 'Alias de message (deprecated)' },
       },
     },
   },
   {
     name: 'delivery_post_to_deliverer_group',
-    description: 'Envia mensagem ao grupo de entregadores do restaurante.',
+    description: 'Envia mensagem ao grupo de entregadores do restaurante. Use o parâmetro "message" com o texto a enviar.',
     inputSchema: {
       type: 'object',
-      required: ['restaurantId', 'text'],
+      required: ['restaurantId', 'message'],
       properties: {
         restaurantId: { type: 'string' },
-        text: { type: 'string' },
+        message: { type: 'string', description: 'Texto da mensagem a enviar ao grupo' },
+        text: { type: 'string', description: 'Alias de message (deprecated)' },
       },
     },
   },
@@ -478,7 +480,11 @@ export async function handleDeliveryTool(
         : String(r.delivererGroupJid ?? '').trim();
       if (!jid) return json({ error: 'JID destino não configurado no restaurante' });
       const instance = await getRestaurantInstance(r);
-      const sent = await sendToJid(instance, jid, String(args.text));
+      const textToSend = args.message ?? args.text;
+      if (!textToSend || String(textToSend).trim() === '') {
+        return json({ error: 'Parâmetro "message" obrigatório e não pode ser vazio' });
+      }
+      const sent = await sendToJid(instance, jid, String(textToSend));
       return json({ ok: true, sent });
     }
 
