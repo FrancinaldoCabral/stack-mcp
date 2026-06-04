@@ -65,15 +65,28 @@ export const evolutionTools: Tool[] = [
   },
   {
     name: 'evolution_send_text',
-    description: 'Envia uma mensagem de texto via WhatsApp por uma instância.',
+    description: 'Envia uma mensagem de texto via WhatsApp por uma instância. Para @mencionar alguém em grupos, passe o JID em mentionedList E escreva @NUMERO no texto. Para mencionar todos no grupo use mentionsEveryOne: true.',
     inputSchema: {
       type: 'object',
       required: ['instanceName', 'number', 'text'],
       properties: {
         instanceName: { type: 'string' },
-        number: { type: 'string', description: 'Número do destinatário com código do país (ex: 5511999999999)' },
-        text: { type: 'string', description: 'Texto da mensagem' },
+        number: { type: 'string', description: 'Número do destinatário com código do país (ex: 5511999999999) ou JID do grupo (ex: 1234567890@g.us)' },
+        text: { type: 'string', description: 'Texto da mensagem. Para mencionar, inclua @NUMERO (sem @s.whatsapp.net) para cada JID em mentionedList.' },
         delay: { type: 'number', description: 'Delay em ms antes de enviar' },
+        mentionedList: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'JIDs a mencionar via @mention nativo do WhatsApp (ex: ["5521999@s.whatsapp.net"]). O texto DEVE conter @NUMERO correspondente. A menção nativa notifica o usuário mesmo com grupo no silencioso.',
+        },
+        mentionsEveryOne: {
+          type: 'boolean',
+          description: 'Menciona TODOS os membros do grupo (@Todos). Notifica todos mesmo com grupo no silencioso. Use ao postar novos pedidos no grupo de entregadores.',
+        },
+        quoted: {
+          type: 'object',
+          description: 'Mensagem a citar/responder: { key: { id: "MESSAGE_ID" } }',
+        },
       },
     },
   },
@@ -405,12 +418,15 @@ export async function handleEvolutionTool(name: string, args: Args): Promise<str
       return toText(res);
     }
     case 'evolution_send_text': {
-      const { instanceName, number, text, delay } = args;
+      const { instanceName, number, text, delay, mentionedList, mentionsEveryOne, quoted } = args;
       const payload: Record<string, unknown> = {
         number,
         text,
         delay: delay ?? 0,
       };
+      if (Array.isArray(mentionedList) && mentionedList.length) payload.mentionedList = mentionedList;
+      if (mentionsEveryOne) payload.mentionsEveryOne = true;
+      if (quoted) payload.quoted = quoted;
       const res = await safeRequest(() =>
         http.post(`/message/sendText/${instanceName}`, payload).then(r => r.data)
       );

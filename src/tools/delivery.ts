@@ -44,10 +44,12 @@ async function sendToJid(
   text: string,
   mentionedList?: string[],
   quotedMessageId?: string,
+  mentionsEveryOne?: boolean,
 ): Promise<unknown> {
   const http = evolution();
   const body: Record<string, unknown> = { number: jid, text, delay: 500 };
   if (mentionedList?.length) body.mentionedList = mentionedList;
+  if (mentionsEveryOne) body.mentionsEveryOne = true;
   if (quotedMessageId) body.quoted = { key: { id: quotedMessageId } };
   return safeRequest(() =>
     http.post(`/message/sendText/${instance}`, body).then(r => r.data)
@@ -595,7 +597,8 @@ export async function handleDeliveryTool(
       if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text.replace('\n\n_Quem aceita? *Responda esta mensagem* para pegar o pedido._', ''));
       let delivererMsgId: string | null = null;
       if (r.delivererGroupJid) {
-        const dlvSent = await sendToJid(instance, String(r.delivererGroupJid), text);
+        // mentionsEveryOne=true: notifica todos os entregadores mesmo com grupo no silencioso
+        const dlvSent = await sendToJid(instance, String(r.delivererGroupJid), text, undefined, undefined, true);
         sent.delivererGroup = dlvSent;
         delivererMsgId = extractMessageId(dlvSent);
         if (delivererMsgId) {
@@ -745,7 +748,8 @@ export async function handleDeliveryTool(
           if (r.delivererGroupJid) {
             const dlvGrp = String(r.delivererGroupJid).trim();
             const orderText = `🔄 Pedido *${released.orderRef}* disponível novamente!\n\n${formatOrderSummary(released)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
-            await sendToJid(instance, dlvGrp, orderText);
+            // mentionsEveryOne=true: re-abre para todos os entregadores com notificação
+            await sendToJid(instance, dlvGrp, orderText, undefined, undefined, true);
           }
         }
       } catch { /* best-effort */ }
