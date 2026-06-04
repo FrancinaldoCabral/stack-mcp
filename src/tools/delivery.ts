@@ -652,7 +652,11 @@ export async function handleDeliveryTool(
     }
 
     case 'delivery_assign_deliverer': {
-      const id = new ObjectId(String(args.orderId));
+      const rawId = String(args.orderId);
+      // Aceita tanto MongoDB ObjectId (24 hex) quanto orderRef (LT-XXXX)
+      const orderFilter = ObjectId.isValid(rawId) && rawId.length === 24
+        ? { _id: new ObjectId(rawId) }
+        : { orderRef: rawId };
       const newDelivererJid = String(args.delivererJid);
 
       const upd: Record<string, unknown> = {
@@ -667,7 +671,7 @@ export async function handleDeliveryTool(
       // (ou o mesmo entregador está re-confirmando sua atribuição)
       const result = await db.collection('delivery_orders').findOneAndUpdate(
         {
-          _id: id,
+          ...orderFilter,
           $or: [
             { delivererJid: { $in: [null, undefined, '', newDelivererJid] } },
             { delivererJid: { $exists: false } },
@@ -680,7 +684,7 @@ export async function handleDeliveryTool(
 
       if (!result) {
         // Pedido já foi aceito por outro entregador
-        const current = await db.collection('delivery_orders').findOne({ _id: id });
+        const current = await db.collection('delivery_orders').findOne(orderFilter);
         return json({
           ok: false,
           alreadyTaken: true,
@@ -707,10 +711,13 @@ export async function handleDeliveryTool(
     }
 
     case 'delivery_cancel_by_deliverer': {
-      const id = new ObjectId(String(args.orderId));
+      const rawOId = String(args.orderId);
+      const cancelOrderFilter = ObjectId.isValid(rawOId) && rawOId.length === 24
+        ? { _id: new ObjectId(rawOId) }
+        : { orderRef: rawOId };
       const delivererJid = String(args.delivererJid);
 
-      const current = await db.collection('delivery_orders').findOne({ _id: id });
+      const current = await db.collection('delivery_orders').findOne(cancelOrderFilter);
       if (!current) return json({ error: 'Pedido não encontrado' });
 
       // Verifica se o entregador que está cancelando é o atribuído
@@ -720,7 +727,7 @@ export async function handleDeliveryTool(
 
       // Volta ao status pendente, remove entregador
       const released = await db.collection('delivery_orders').findOneAndUpdate(
-        { _id: id },
+        cancelOrderFilter,
         {
           $set: {
             status: 'pendente',
