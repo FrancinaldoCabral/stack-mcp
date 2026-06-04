@@ -398,6 +398,45 @@ export async function handleDeliveryTool(
       const now = new Date();
       const status = name === 'delivery_draft_order' ? 'rascunho' : 'pendente';
 
+      // ── Upsert de rascunho ──────────────────────────────────────────────────
+      // Se já existe um rascunho aberto para este restaurante, ATUALIZA em vez de criar
+      // um novo documento. Isso evita duplicações quando o LLM chama delivery_draft_order
+      // múltiplas vezes durante a captura do mesmo pedido (ex: adiciona paymentMethod).
+      // Nota: upsert só se aplica a rascunho. Pedidos já confirmados (pendente, aceito, etc.)
+      // não são afetados, permitindo múltiplos pedidos simultâneos normalmente.
+      if (name === 'delivery_draft_order') {
+        const existing = await db.collection('delivery_orders').findOne(
+          { restaurantId: String(r._id), status: 'rascunho' },
+          { sort: { createdAt: -1 } },
+        );
+        if (existing) {
+          const UPD_FIELDS = ['clientName', 'clientAddress', 'clientPhone', 'items', 'value', 'deliveryFee', 'paymentMethod', 'externalCode', 'notes'];
+          const upd: Record<string, unknown> = { updatedAt: now };
+          for (const k of UPD_FIELDS) if (args[k] !== undefined) upd[k] = args[k];
+          if (args.commune !== undefined) upd.clientCommune = args.commune;
+          // Calcula taxa se endereço foi atualizado ou ainda não calculado
+          const addrForFee = (args.clientAddress ? String(args.clientAddress) : null)
+            ?? (existing.clientAddress as string | null);
+          if (args.deliveryFee == null && addrForFee && existing.deliveryFee == null) {
+            const af = await tryCalcFee(r, addrForFee);
+            if (af) { upd.deliveryFee = af.feeEur; upd.distanceKm = af.distanceKm; }
+          }
+          const updated = await db.collection('delivery_orders').findOneAndUpdate(
+            { _id: existing._id }, { $set: upd }, { returnDocument: 'after' },
+          );
+          return json({
+            ok: true,
+            orderId: updated!._id,
+            orderRef: updated!.orderRef,
+            status: 'rascunho',
+            updated: true,
+            deliveryFee: updated!.deliveryFee,
+            distanceKm: updated!.distanceKm,
+          });
+        }
+      }
+      // ── Sem rascunho existente — cria novo documento ────────────────────────
+
       // Calcula taxa automaticamente se não foi fornecida explicitamente
       let autoFee: { feeEur: number; distanceKm: number } | null = null;
       if (args.deliveryFee == null && args.clientAddress) {
