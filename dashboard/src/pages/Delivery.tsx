@@ -377,7 +377,11 @@ export function OrdersTab() {
       render: (_: unknown, o: DeliveryOrder) => (
         <Space direction="vertical" size={0}>
           {o.value != null && <Text strong>€{Number(o.value).toFixed(2)}</Text>}
-          {o.deliveryFee != null && <Text type="secondary" style={{ fontSize: 11 }}>Taxa: €{Number(o.deliveryFee).toFixed(2)}</Text>}
+          {o.deliveryFee != null && (
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            Taxa: €{Number(o.deliveryFee).toFixed(2)}{o.distanceKm != null ? ` · ${o.distanceKm}km` : ''}
+          </Text>
+        )}
           {o.paymentMethod && <Text type="secondary" style={{ fontSize: 10 }}>{o.paymentMethod}</Text>}
         </Space>
       ),
@@ -485,7 +489,8 @@ export function OrdersTab() {
             <Text type="secondary">Itens:</Text>
             <Text>{Array.isArray(viewing.items) ? viewing.items.join(', ') : (viewing.items ?? '—')}</Text>
             <Text type="secondary">Valor pedido:</Text><Text strong>{eur(viewing.value)}</Text>
-            <Text type="secondary">Taxa entrega:</Text><Text>{eur(viewing.deliveryFee)}</Text>
+            <Text type="secondary">Taxa entrega:</Text>
+            <Text>{eur(viewing.deliveryFee)}{viewing.distanceKm != null ? ` (${viewing.distanceKm} km)` : ''}</Text>
             <Text type="secondary">Pagamento:</Text><Text>{viewing.paymentMethod ?? '—'}</Text>
             <Text type="secondary">Entregador:</Text><Text>{viewing.delivererName ?? '—'}</Text>
             <Text type="secondary">JID entregador:</Text><Text code style={{ fontSize: 11 }}>{viewing.delivererJid ?? '—'}</Text>
@@ -670,7 +675,7 @@ export function SettlementsTab() {
       title: 'Valor', dataIndex: 'amount', key: 'amount', width: 100,
       render: (v: number, r: DeliverySettlement) => (
         <span style={{ color: r.type === 'debito' ? '#cf1322' : '#389e0d', fontWeight: 600 }}>
-          R$ {Number(v).toFixed(2)}
+          €{Number(v).toFixed(2)}
         </span>
       ),
     },
@@ -707,7 +712,7 @@ export function SettlementsTab() {
           <Space wrap style={{ marginTop: 4 }}>
             {summaryRows.map(([jid, { name, balance }]) => (
               <Tag key={jid} color={balance > 0 ? 'green' : 'red'}>
-                {name}: {balance > 0 ? '+' : ''}R$ {balance.toFixed(2)}
+                {name}: {balance > 0 ? '+' : ''}€{balance.toFixed(2)}
               </Tag>
             ))}
           </Space>
@@ -791,7 +796,7 @@ export function SettlementsTab() {
                 { value: 'credito', label: 'Crédito (LT deve ao entregador)' },
               ]} />
             </Form.Item>
-            <Form.Item name="amount" label="Valor (R$)" rules={[{ required: true }]} style={{ flex: 1, marginLeft: 12 }}>
+            <Form.Item name="amount" label="Valor (€)" rules={[{ required: true }]} style={{ flex: 1, marginLeft: 12 }}>
               <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
             </Form.Item>
           </Space.Compact>

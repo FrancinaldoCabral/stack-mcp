@@ -148,6 +148,7 @@ export interface DeliveryOrder {
   items?: string | string[];
   value?: number;
   deliveryFee?: number;
+  distanceKm?: number;
   paymentMethod?: string;
   delivererJid?: string;
   delivererName?: string;

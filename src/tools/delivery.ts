@@ -70,7 +70,10 @@ function formatOrderSummary(order: WithId<Document>): string {
     lines.push(`Itens:\n${order.items.map((it: unknown) => `  • ${String(it)}`).join('\n')}`);
   }
   if (order.value != null) lines.push(`Valor pedido: €${Number(order.value).toFixed(2)}`);
-  if (order.deliveryFee != null) lines.push(`Taxa de entrega: €${Number(order.deliveryFee).toFixed(2)}`);
+  if (order.deliveryFee != null) {
+    const distStr = order.distanceKm != null ? ` (${Number(order.distanceKm).toFixed(1)} km)` : '';
+    lines.push(`Taxa de entrega: €${Number(order.deliveryFee).toFixed(2)}${distStr}`);
+  }
   if (order.paymentMethod) lines.push(`Pagamento: ${order.paymentMethod}`);
   if (order.notes) lines.push(`Obs: ${order.notes}`);
   if (order.status) lines.push(`Status: ${order.status}`);
@@ -324,6 +327,47 @@ async function routeDistanceKm(
   return meters / 1000;
 }
 
+// ── Auto fee calculation ─────────────────────────────────────────────────────
+
+/**
+ * Tenta calcular a taxa de entrega para o pedido.
+ * Retorna { feeEur, distanceKm } se bem-sucedido, null se não for possível
+ * (endereço ausente, tabela não configurada, geocoding falhou, etc.).
+ * Nunca lança — falhas são silenciosas (best-effort).
+ */
+async function tryCalcFee(
+  restaurant: import('mongodb').WithId<import('mongodb').Document>,
+  clientAddress: string,
+): Promise<{ feeEur: number; distanceKm: number } | null> {
+  try {
+    const originAddress = (restaurant.address as string | undefined)?.trim();
+    if (!originAddress || !clientAddress.trim()) return null;
+
+    const [origin, dest] = await Promise.all([
+      geocode(originAddress),
+      geocode(clientAddress.trim()),
+    ]);
+    const distanceKm = await routeDistanceKm(origin, dest);
+
+    const db = await getDb();
+    const bizId = restaurant.businessId as string | undefined;
+    if (!bizId) return null;
+    const biz = await db.collection('businesses').findOne(
+      { _id: new ObjectId(bizId) },
+      { projection: { 'settings.deliveryFeeTable': 1 } },
+    );
+    const table = (biz?.settings?.deliveryFeeTable as Array<{ minKm: number; maxKm: number; feeEur: number }> | undefined) ?? [];
+    if (!table.length) return null;
+
+    const band = table.find(b => distanceKm >= b.minKm && distanceKm <= b.maxKm);
+    if (!band) return null;
+
+    return { feeEur: band.feeEur, distanceKm: Math.round(distanceKm * 10) / 10 };
+  } catch {
+    return null;
+  }
+}
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 export async function handleDeliveryTool(
@@ -354,6 +398,12 @@ export async function handleDeliveryTool(
       const now = new Date();
       const status = name === 'delivery_draft_order' ? 'rascunho' : 'pendente';
 
+      // Calcula taxa automaticamente se não foi fornecida explicitamente
+      let autoFee: { feeEur: number; distanceKm: number } | null = null;
+      if (args.deliveryFee == null && args.clientAddress) {
+        autoFee = await tryCalcFee(r, String(args.clientAddress));
+      }
+
       const doc: Record<string, unknown> = {
         orderRef: genOrderRef(),
         restaurantId: String(r._id),
@@ -365,7 +415,8 @@ export async function handleDeliveryTool(
         clientPhone: args.clientPhone ?? '',
         items: Array.isArray(args.items) ? args.items : [],
         value: args.value != null ? Number(args.value) : null,
-        deliveryFee: args.deliveryFee != null ? Number(args.deliveryFee) : null,
+        deliveryFee: args.deliveryFee != null ? Number(args.deliveryFee) : (autoFee?.feeEur ?? null),
+        distanceKm: autoFee?.distanceKm ?? null,
         paymentMethod: args.paymentMethod ?? null,
         externalCode: args.externalCode ?? null,
         notes: args.notes ?? '',
@@ -376,7 +427,15 @@ export async function handleDeliveryTool(
         updatedAt: now,
       };
       const result = await db.collection('delivery_orders').insertOne(doc);
-      return json({ ok: true, orderId: result.insertedId, orderRef: doc.orderRef, status });
+      return json({
+        ok: true,
+        orderId: result.insertedId,
+        orderRef: doc.orderRef,
+        status,
+        deliveryFee: doc.deliveryFee,
+        distanceKm: doc.distanceKm,
+        feeCalculated: autoFee != null,
+      });
     }
 
     case 'delivery_update_draft': {
@@ -390,6 +449,17 @@ export async function handleDeliveryTool(
       const update: Record<string, unknown> = { updatedAt: new Date() };
       for (const k of PATCHABLE) if (args[k] !== undefined) update[k] = args[k];
       if (args.commune !== undefined) update.clientCommune = args.commune;
+      // Se endereço foi atualizado e taxa não foi fornecida, recalcula
+      if (args.clientAddress && args.deliveryFee == null) {
+        const restaurant = await getRestaurant(String(current.restaurantId));
+        if (restaurant) {
+          const autoFee = await tryCalcFee(restaurant, String(args.clientAddress));
+          if (autoFee) {
+            update.deliveryFee = autoFee.feeEur;
+            update.distanceKm = autoFee.distanceKm;
+          }
+        }
+      }
       const result = await db.collection('delivery_orders').findOneAndUpdate(
         { _id: id }, { $set: update }, { returnDocument: 'after' },
       );
@@ -412,18 +482,32 @@ export async function handleDeliveryTool(
         { returnDocument: 'after', sort: { createdAt: -1 } },
       );
       if (!order) return json({ error: 'Pedido não encontrado ou não está em rascunho' });
+
       const r = await getRestaurant(String(order.restaurantId));
       if (!r) return json({ ok: true, warning: 'Pedido confirmado, mas restaurante não encontrado para postagem' });
+
+      // Calcula taxa se ainda não foi calculada
+      if (order.deliveryFee == null && order.clientAddress) {
+        const autoFee = await tryCalcFee(r, String(order.clientAddress));
+        if (autoFee) {
+          await db.collection('delivery_orders').updateOne(
+            { _id: order._id },
+            { $set: { deliveryFee: autoFee.feeEur, distanceKm: autoFee.distanceKm, updatedAt: new Date() } },
+          );
+          order.deliveryFee = autoFee.feeEur;
+          order.distanceKm = autoFee.distanceKm;
+        }
+      }
+
       const instance = await getRestaurantInstance(r);
-      const text = `🆕 Novo pedido confirmado:\n\n${formatOrderSummary(order)}`;
+      const text = `🆕 Novo pedido confirmado:\n\n${formatOrderSummary(order)}\n\nQuem aceita? Responda esta mensagem.`;
       const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
       const sent: Record<string, unknown> = {};
-      if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text);
-      // Sempre posta no grupo dos entregadores quando configurado (crossPost legacy mantido por compatibilidade)
+      if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text.replace('\n\nQuem aceita? Responda esta mensagem.', ''));
       if (r.delivererGroupJid) {
         sent.delivererGroup = await sendToJid(instance, String(r.delivererGroupJid), text);
       }
-      return json({ ok: true, orderRef: order.orderRef, sent });
+      return json({ ok: true, orderRef: order.orderRef, deliveryFee: order.deliveryFee, sent });
     }
 
     case 'delivery_update_order_status': {
@@ -460,7 +544,8 @@ export async function handleDeliveryTool(
       if (!notify) return json({ ok: true, order });
       const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
       if (!cmdJid) return json({ ok: true, order, warning: 'Restaurante sem commandJid' });
-      const text = `📦 Pedido *${order.orderRef ?? order._id}* — status: *${status}*${note ? `\n${note}` : ''}`;
+      const feeStr = order.deliveryFee != null ? ` | Taxa: €${Number(order.deliveryFee).toFixed(2)}` : '';
+      const text = `📦 Pedido *${order.orderRef ?? order._id}* — status: *${status}*${feeStr}${note ? `\n${note}` : ''}`;
       const sent = await sendToJid(instance, cmdJid, text);
       return json({ ok: true, order, sent });
     }
