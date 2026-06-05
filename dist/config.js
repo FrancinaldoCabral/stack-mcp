@@ -46,4 +46,7 @@ export const config = {
         password: process.env.SMTP_PASSWORD ?? '',
         from: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? 'noreply@vendly.chat',
     },
+    google: {
+        routeApiKey: process.env.GOOGLE_ROUTE_API_KEY ?? '',
+    },
 };

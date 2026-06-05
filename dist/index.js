@@ -310,30 +310,31 @@ async function main() {
                 clearTimeout(t2);
             }
         });
-        // ── Agente Loop: loop ilimitado de tool calls para os agentes n8n ──────────
-        // Recebe o openRouterBody já montado pelo Construir Prompt do n8n.
-        // Executa rounds LLM → tool → LLM até resposta final (max 10 rounds).
-        // Retorna { choices: [{ message: { content }, finish_reason }] } (formato OpenRouter).
+        // Agentic loop — executa LLM + tool calls em loop até resposta final (sem limite de rounds).
+        // Substitui a cadeia manual de rounds hardcoded no n8n.
+        // Recebe { openRouterBody, businessId, instance } do n8n via HTTP Request node.
+        // Retorna { choices: [{ message: { content }, finish_reason: 'stop' }] } — compatível com Parsear Chunks.
         webApp.post('/agent-loop', async (req, res) => {
             const MAX_ITER = 10;
             const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-            const apiKey = process.env.OPENROUTER_API_KEY ?? '';
+            const authHeader = req.headers.authorization;
+            const apiKey = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
+                ?? process.env.OPENROUTER_API_KEY ?? '';
             const qdrantUrl = process.env.QDRANT_URL ?? 'http://localhost:6333';
             const qdrantKey = process.env.QDRANT_API_KEY ?? '';
             const embModel = process.env.OPENROUTER_EMBEDDING_MODEL ?? 'openai/text-embedding-3-small';
-            const body = req.body;
-            let currentBody = body.openRouterBody;
+            const payload = req.body;
+            let currentBody = payload.openRouterBody;
             if (!currentBody || typeof currentBody !== 'object') {
                 res.status(400).json({ error: 'openRouterBody required' });
                 return;
             }
-            const businessId = String(body.businessId ?? body.instance ?? '');
-            const instance = String(body.instance ?? '');
+            const businessId = String(payload.businessId ?? payload.instance ?? '');
+            const instance = String(payload.instance ?? '');
             let finalContent = null;
-            let iter = 0;
-            while (iter < MAX_ITER) {
-                iter++;
-                // 1. Chamar LLM
+            let toolCallsMade = false;
+            for (let iter = 0; iter < MAX_ITER; iter++) {
+                // Chamar LLM
                 let llmData;
                 try {
                     const ctrl = new AbortController();
@@ -341,10 +342,7 @@ async function main() {
                     try {
                         const r = await fetch(OPENROUTER_URL, {
                             method: 'POST',
-                            headers: {
-                                'Authorization': `Bearer ${apiKey}`,
-                                'Content-Type': 'application/json',
-                            },
+                            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
                             body: JSON.stringify(currentBody),
                             signal: ctrl.signal,
                         });
@@ -359,129 +357,112 @@ async function main() {
                     break;
                 }
                 const choice = llmData.choices?.[0];
-                const finishReason = choice?.finish_reason ?? '';
-                const nativeReason = choice?.native_finish_reason ?? '';
-                if (finishReason === 'error' || nativeReason.includes('MALFORMED')) {
+                const finish = choice?.finish_reason ?? '';
+                const native = choice?.native_finish_reason ?? '';
+                if (finish === 'error' || native.includes('MALFORMED')) {
                     finalContent = 'Desculpe, não consegui processar essa mensagem. Pode tentar novamente?';
                     break;
                 }
                 const toolCalls = choice?.message?.tool_calls ?? [];
-                // 2. Sem tool calls → resposta final
+                // Sem tool calls → resposta final
                 if (toolCalls.length === 0) {
-                    finalContent = choice?.message?.content ?? llmData.error?.message ?? 'Desculpe, erro interno.';
+                    finalContent = choice?.message?.content
+                        ?? llmData.error?.message
+                        ?? 'Desculpe, erro interno.';
                     break;
                 }
-                // 3. Processar tool calls
+                // Executar tool calls e acumular resultados
+                toolCallsMade = true;
                 const assistantMsg = choice.message;
-                const toolResultMsgs = [];
+                const toolResults = [];
                 for (const tc of toolCalls) {
                     const toolName = tc.function?.name ?? '';
                     let args = {};
                     try {
                         args = JSON.parse(tc.function?.arguments ?? '{}');
                     }
-                    catch { /* ignore */ }
-                    let toolContent = '';
+                    catch { /**/ }
+                    let content = '';
                     if (toolName === 'buscar_memoria') {
-                        // Qdrant vector search
                         try {
                             const query = String(args.query ?? '');
                             const embCtrl = new AbortController();
-                            const embT = setTimeout(() => embCtrl.abort(), 15_000);
+                            const et = setTimeout(() => embCtrl.abort(), 15_000);
                             let embedding = [];
                             try {
-                                const embR = await fetch('https://openrouter.ai/api/v1/embeddings', {
+                                const er = await fetch('https://openrouter.ai/api/v1/embeddings', {
                                     method: 'POST',
                                     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ model: embModel, input: query }),
                                     signal: embCtrl.signal,
                                 });
-                                const embData = await embR.json();
-                                embedding = embData.data?.[0]?.embedding ?? [];
+                                const ed = await er.json();
+                                embedding = ed.data?.[0]?.embedding ?? [];
                             }
                             finally {
-                                clearTimeout(embT);
+                                clearTimeout(et);
                             }
                             const qCtrl = new AbortController();
-                            const qT = setTimeout(() => qCtrl.abort(), 10_000);
+                            const qt = setTimeout(() => qCtrl.abort(), 10_000);
                             try {
-                                const qHeaders = { 'Content-Type': 'application/json' };
+                                const qh = { 'Content-Type': 'application/json' };
                                 if (qdrantKey)
-                                    qHeaders['api-key'] = qdrantKey;
-                                const qR = await fetch(`${qdrantUrl}/collections/vendly_intelligence/points/search`, {
-                                    method: 'POST',
-                                    headers: qHeaders,
+                                    qh['api-key'] = qdrantKey;
+                                const qr = await fetch(`${qdrantUrl}/collections/vendly_intelligence/points/search`, {
+                                    method: 'POST', headers: qh, signal: qCtrl.signal,
                                     body: JSON.stringify({
-                                        vector: embedding,
-                                        limit: 5,
-                                        with_payload: true,
-                                        score_threshold: 0.35,
-                                        filter: {
-                                            should: [
+                                        vector: embedding, limit: 5, with_payload: true, score_threshold: 0.35,
+                                        filter: { should: [
                                                 { key: 'businessId', match: { value: businessId } },
                                                 { key: 'businessId', match: { value: 'global' } },
                                                 { key: 'instance', match: { value: instance } },
                                                 { key: 'instance', match: { value: 'global' } },
-                                            ],
-                                        },
+                                            ] },
                                     }),
-                                    signal: qCtrl.signal,
                                 });
-                                const qData = await qR.json();
-                                const results = (qData.result ?? [])
+                                const qd = await qr.json();
+                                const hits = (qd.result ?? [])
                                     .filter(r => (r.score ?? 0) >= 0.35)
                                     .map(r => r.payload?.content || r.payload?.text || '')
                                     .filter(Boolean);
-                                toolContent = results.length > 0
-                                    ? results.join('\n\n')
-                                    : 'Nenhuma informação relevante encontrada na base de conhecimento.';
+                                content = hits.length > 0 ? hits.join('\n\n') : 'Nenhuma informação relevante encontrada.';
                             }
                             finally {
-                                clearTimeout(qT);
+                                clearTimeout(qt);
                             }
                         }
                         catch (e) {
-                            toolContent = 'Erro ao buscar na base de conhecimento: ' + String(e);
+                            content = 'Erro ao buscar na base de conhecimento: ' + String(e);
                         }
                     }
                     else {
-                        // MCP tool (delivery_* e outros)
                         try {
                             const text = await routeTool(toolName, args);
-                            // routeTool retorna JSON string no formato { ok, result } ou texto simples
                             try {
-                                const parsed = JSON.parse(text);
-                                if (parsed.ok === true) {
-                                    toolContent = typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result);
-                                }
-                                else if (parsed.ok === false) {
-                                    toolContent = 'Erro ferramenta: ' + (parsed.error ? String(parsed.error) : JSON.stringify(parsed));
-                                }
-                                else {
-                                    toolContent = text;
-                                }
+                                const p = JSON.parse(text);
+                                content = p.ok === true
+                                    ? (typeof p.result === 'string' ? p.result : JSON.stringify(p.result))
+                                    : p.ok === false
+                                        ? 'Erro ferramenta: ' + String(p.error ?? JSON.stringify(p))
+                                        : text;
                             }
                             catch {
-                                toolContent = text;
+                                content = text;
                             }
                         }
                         catch (e) {
-                            toolContent = 'Erro ao executar ' + toolName + ': ' + String(e);
+                            content = 'Erro ao executar ' + toolName + ': ' + String(e);
                         }
                     }
-                    toolResultMsgs.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
+                    toolResults.push({ role: 'tool', tool_call_id: tc.id, content });
                 }
-                // 4. Atualizar mensagens para próximo round
-                const prevMessages = Array.isArray(currentBody.messages) ? currentBody.messages : [];
-                currentBody = {
-                    ...currentBody,
-                    messages: [...prevMessages, assistantMsg, ...toolResultMsgs],
-                };
+                // Próximo round com o contexto acumulado
+                const prevMsgs = Array.isArray(currentBody.messages) ? currentBody.messages : [];
+                currentBody = { ...currentBody, messages: [...prevMsgs, assistantMsg, ...toolResults] };
             }
-            if (!finalContent) {
-                finalContent = 'Desculpe, não consegui concluir. Pode tentar novamente?';
-            }
-            res.json({ choices: [{ message: { content: finalContent }, finish_reason: 'stop' }] });
+            // tool_calls_made sinaliza ao Parsear Chunks que houve execucao real de ferramentas
+            // (desativa guarda de alucinacao que filtraria referencias legítimas como LT-XXXX)
+            res.json({ choices: [{ message: { content: finalContent ?? 'Desculpe, não consegui concluir. Tente novamente.' }, finish_reason: 'stop' }], tool_calls_made: toolCallsMade });
         });
         // REST direto de ferramentas (uso interno: N8N, scripts).
         // Bypassa o protocolo MCP (sem session/initialize) — chama o handler direto.

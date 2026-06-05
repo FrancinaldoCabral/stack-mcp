@@ -41,4 +41,7 @@ export declare const config: {
         password: string;
         from: string;
     };
+    google: {
+        routeApiKey: string;
+    };
 };
