@@ -329,6 +329,12 @@ async function main() {
           finish_reason?: string; native_finish_reason?: string;
           message?: { content?: string; tool_calls?: Array<{ id: string; function?: { name: string; arguments: string } }> };
         };
+        // Erro direto do provider (sem choices) — não vazar mensagem técnica para o usuário
+        if (llmData.error || !llmData.choices) {
+          finalContent = 'Desculpe, não consegui processar essa mensagem agora. Pode tentar novamente?';
+          break;
+        }
+
         const choice = (llmData.choices as LLMChoice[] | undefined)?.[0];
         const finish = choice?.finish_reason ?? '';
         const native = choice?.native_finish_reason ?? '';
@@ -342,9 +348,7 @@ async function main() {
 
         // Sem tool calls → resposta final
         if (toolCalls.length === 0) {
-          finalContent = choice?.message?.content
-            ?? (llmData.error as { message?: string } | undefined)?.message
-            ?? 'Desculpe, erro interno.';
+          finalContent = choice?.message?.content ?? 'Desculpe, erro interno.';
           break;
         }
 

@@ -356,6 +356,11 @@ async function main() {
                     finalContent = 'Desculpe, erro ao conectar com o assistente. Tente novamente.';
                     break;
                 }
+                // Erro direto do provider (sem choices) — não vazar mensagem técnica para o usuário
+                if (llmData.error || !llmData.choices) {
+                    finalContent = 'Desculpe, não consegui processar essa mensagem agora. Pode tentar novamente?';
+                    break;
+                }
                 const choice = llmData.choices?.[0];
                 const finish = choice?.finish_reason ?? '';
                 const native = choice?.native_finish_reason ?? '';
@@ -366,9 +371,7 @@ async function main() {
                 const toolCalls = choice?.message?.tool_calls ?? [];
                 // Sem tool calls → resposta final
                 if (toolCalls.length === 0) {
-                    finalContent = choice?.message?.content
-                        ?? llmData.error?.message
-                        ?? 'Desculpe, erro interno.';
+                    finalContent = choice?.message?.content ?? 'Desculpe, erro interno.';
                     break;
                 }
                 // Executar tool calls e acumular resultados
