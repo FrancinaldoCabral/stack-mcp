@@ -253,6 +253,19 @@ export const deliveryTools: Tool[] = [
     },
   },
   {
+    name: 'delivery_deliverer_context',
+    description: 'Monta o bloco de contexto de pedidos para o agente entregador. Retorna activeOrdersCtx pronto para injetar no system prompt. Inclui ## PEDIDO DESTA MENSAGEM (se replyToExternalId bate com lastDelivererGroupMsgId), ## SEU PEDIDO ATIVO, ## Pedidos disponíveis, ## Pedidos em andamento.',
+    inputSchema: {
+      type: 'object',
+      required: ['restaurantId'],
+      properties: {
+        restaurantId: { type: 'string' },
+        senderPhone: { type: 'string', description: 'Dígitos puros do número do entregador' },
+        replyToExternalId: { type: 'string', description: 'ID da mensagem respondida (reply_to_external_id do webhook)' },
+      },
+    },
+  },
+  {
     name: 'delivery_get_order',
     description: 'Retorna um pedido por ID ou orderRef (LT-XXXXXX). O campo lastDelivererGroupMsgId contém o ID da última mensagem postada no grupo de entregadores — use como quotedMessageId para responder diretamente ao post do pedido.',
     inputSchema: {
@@ -810,6 +823,87 @@ export async function handleDeliveryTool(
       const docs = await db.collection('delivery_orders').find(filter)
         .sort({ createdAt: -1 }).limit(limit).toArray();
       return json(docs);
+    }
+
+    case 'delivery_deliverer_context': {
+      const rId = String(args.restaurantId ?? '');
+      const sPhone = String(args.senderPhone ?? '').replace(/\D/g, '');
+      const replyId = args.replyToExternalId ? String(args.replyToExternalId) : null;
+      const digits = (s: unknown) => String(s ?? '').replace(/@[^@]+$/, '').replace(/\D/g, '');
+
+      const ACTIVE_STATUSES = ['em_espera', 'pendente', 'aceito', 'a_caminho'];
+      const filter: Record<string, unknown> = { status: { $in: ACTIVE_STATUSES } };
+      if (rId) filter.restaurantId = rId;
+
+      const docs = await db.collection('delivery_orders').find(filter)
+        .sort({ createdAt: -1 }).limit(50).toArray();
+
+      const fmtOrder = (o: Record<string, unknown>, tag?: string) => {
+        const ref = String(o.orderRef ?? o._id ?? '');
+        const oid = String(o._id ?? '');
+        const status = String(o.status ?? '').toUpperCase();
+        const client = String(o.clientName ?? '?');
+        const addr = String(o.clientAddress ?? '?').slice(0, 60);
+        const dlv = o.delivererName ? ` | Entregador: ${o.delivererName}` : '';
+        const base = `orderRef=${ref} orderId=${oid} | ${status} | Cliente: ${client} | End: ${addr}${dlv}`;
+        return tag ? `[${tag}] ${base}` : base;
+      };
+
+      // Pedido da reply (maior prioridade)
+      const repliedOrder = replyId
+        ? docs.find((o) => o.lastDelivererGroupMsgId === replyId) ?? null
+        : null;
+
+      // Pedido(s) ativo(s) do remetente (aceito/a_caminho onde ele é o entregador)
+      const myOrders = sPhone
+        ? docs.filter((o) =>
+            ['aceito', 'a_caminho'].includes(String(o.status)) &&
+            digits(o.delivererJid) === sPhone
+          )
+        : [];
+
+      // Disponíveis: em_espera ou pendente, sem entregador atribuído, exceto o pedido da reply
+      const available = docs.filter((o) =>
+        ['em_espera', 'pendente'].includes(String(o.status)) &&
+        !o.delivererJid &&
+        (!repliedOrder || String(o._id) !== String(repliedOrder._id))
+      );
+
+      // Em andamento por outros entregadores
+      const ongoing = docs.filter((o) =>
+        ['aceito', 'a_caminho'].includes(String(o.status)) &&
+        (!sPhone || digits(o.delivererJid) !== sPhone)
+      );
+
+      let ctx = '';
+
+      if (repliedOrder) {
+        ctx += '\n\n## PEDIDO DESTA MENSAGEM (entregador fez reply ao anuncio):\n';
+        ctx += fmtOrder(repliedOrder as Record<string, unknown>);
+        ctx += '\n[Use este orderId diretamente em delivery_assign_deliverer — não pergunte confirmação]';
+      }
+
+      if (myOrders.length > 0) {
+        ctx += '\n\n## SEU PEDIDO ATIVO (você é o entregador atribuído):\n';
+        ctx += myOrders.map((o) => fmtOrder(o as Record<string, unknown>, 'SEU PEDIDO')).join('\n');
+        ctx += '\n[Use o orderRef ou orderId acima para chamar delivery_update_order_status]';
+      }
+
+      if (available.length > 0) {
+        ctx += '\n\n## Pedidos disponíveis (aguardando entregador):\n';
+        ctx += available.map((o) => fmtOrder(o as Record<string, unknown>)).join('\n');
+      }
+
+      if (ongoing.length > 0) {
+        ctx += '\n\n## Pedidos em andamento (outros entregadores):\n';
+        ctx += ongoing.map((o) => fmtOrder(o as Record<string, unknown>)).join('\n');
+      }
+
+      if (docs.length === 0) {
+        ctx = '\n\n## Pedidos ativos: nenhum no momento.';
+      }
+
+      return json({ ok: true, activeOrdersCtx: ctx });
     }
 
     case 'delivery_get_order': {
