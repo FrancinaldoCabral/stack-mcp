@@ -622,7 +622,8 @@ export async function handleDeliveryTool(
           );
         }
       }
-      return json({ ok: true, orderRef: order.orderRef, status: 'em_espera', deliveryFee: order.deliveryFee, delivererMsgId, restaurantAddress, sent });
+      const postedTo = Object.keys(sent).join(', ') || 'none';
+      return json({ ok: true, orderRef: order.orderRef, status: 'em_espera', deliveryFee: order.deliveryFee, delivererMsgId, restaurantAddress, postedTo });
     }
 
     case 'delivery_update_order_status': {
@@ -665,8 +666,8 @@ export async function handleDeliveryTool(
       if (!cmdJid) return json({ ok: true, order, warning: 'Restaurante sem commandJid' });
       const feeStr = order.deliveryFee != null ? ` | Taxa: €${Number(order.deliveryFee).toFixed(2)}` : '';
       const text = `📦 Pedido *${order.orderRef ?? order._id}* — status: *${status}*${feeStr}${note ? `\n${note}` : ''}`;
-      const sent = await sendToJid(instance, cmdJid, text);
-      return json({ ok: true, order, sent });
+      await sendToJid(instance, cmdJid, text);
+      return json({ ok: true, order });
     }
 
     case 'delivery_assign_deliverer': {
