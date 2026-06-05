@@ -303,6 +303,7 @@ async function main() {
       const instance = String(payload.instance ?? '');
 
       let finalContent: string | null = null;
+      let toolCallsMade = false;
 
       for (let iter = 0; iter < MAX_ITER; iter++) {
         // Chamar LLM
@@ -348,6 +349,7 @@ async function main() {
         }
 
         // Executar tool calls e acumular resultados
+        toolCallsMade = true;
         const assistantMsg = choice!.message!;
         const toolResults: Array<{ role: string; tool_call_id: string; content: string }> = [];
 
@@ -421,7 +423,9 @@ async function main() {
         currentBody = { ...currentBody, messages: [...prevMsgs, assistantMsg, ...toolResults] };
       }
 
-      res.json({ choices: [{ message: { content: finalContent ?? 'Desculpe, não consegui concluir. Tente novamente.' }, finish_reason: 'stop' }] });
+      // tool_calls_made sinaliza ao Parsear Chunks que houve execucao real de ferramentas
+      // (desativa guarda de alucinacao que filtraria referencias legítimas como LT-XXXX)
+      res.json({ choices: [{ message: { content: finalContent ?? 'Desculpe, não consegui concluir. Tente novamente.' }, finish_reason: 'stop' }], tool_calls_made: toolCallsMade });
     });
 
     // REST direto de ferramentas (uso interno: N8N, scripts).
