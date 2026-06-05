@@ -304,10 +304,17 @@ async function main() {
 
       let finalContent: string | null = null;
       let toolCallsMade = false;
+      const model = String((currentBody as Record<string,unknown>).model ?? 'unknown');
+      const ctxLog: string[] = [];
 
       for (let iter = 0; iter < MAX_ITER; iter++) {
+        const msgs = Array.isArray(currentBody.messages) ? currentBody.messages as unknown[] : [];
+        const ctxChars = JSON.stringify(msgs).length;
+        ctxLog.push(`round${iter}:${ctxChars}chars`);
+
         // Chamar LLM
         let llmData: Record<string, unknown>;
+        let httpStatus = 0;
         try {
           const ctrl = new AbortController();
           const t = setTimeout(() => ctrl.abort(), 60_000);
@@ -318,9 +325,11 @@ async function main() {
               body: JSON.stringify(currentBody),
               signal: ctrl.signal,
             });
+            httpStatus = r.status;
             llmData = await r.json() as Record<string, unknown>;
           } finally { clearTimeout(t); }
         } catch (e) {
+          console.error(`[agent-loop] model=${model} iter=${iter} ctx=${ctxLog.join(',')} FETCH_ERROR:`, String(e));
           finalContent = 'Desculpe, erro ao conectar com o assistente. Tente novamente.';
           break;
         }
@@ -329,8 +338,9 @@ async function main() {
           finish_reason?: string; native_finish_reason?: string;
           message?: { content?: string; tool_calls?: Array<{ id: string; function?: { name: string; arguments: string } }> };
         };
-        // Erro direto do provider (sem choices) — não vazar mensagem técnica para o usuário
+        // Erro direto do provider — logar o payload bruto para diagnóstico
         if (llmData.error || !llmData.choices) {
+          console.error(`[agent-loop] PROVIDER_ERROR model=${model} iter=${iter} http=${httpStatus} ctx=${ctxLog.join(',')} payload=${JSON.stringify(llmData).slice(0, 500)}`);
           finalContent = 'Desculpe, não consegui processar essa mensagem agora. Pode tentar novamente?';
           break;
         }
@@ -356,6 +366,8 @@ async function main() {
         toolCallsMade = true;
         const assistantMsg = choice!.message!;
         const toolResults: Array<{ role: string; tool_call_id: string; content: string }> = [];
+        const toolNames = toolCalls.map(tc => tc.function?.name ?? '?').join(',');
+        console.log(`[agent-loop] model=${model} iter=${iter} ctx=${ctxChars}chars tools=[${toolNames}]`);
 
         for (const tc of toolCalls) {
           const toolName = tc.function?.name ?? '';
@@ -419,6 +431,7 @@ async function main() {
             } catch (e) { content = 'Erro ao executar ' + toolName + ': ' + String(e); }
           }
 
+          console.log(`[agent-loop]   tool=${toolName} result=${content.length}chars`);
           toolResults.push({ role: 'tool', tool_call_id: tc.id, content });
         }
 
