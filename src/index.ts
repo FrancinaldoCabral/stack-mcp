@@ -280,6 +280,185 @@ async function main() {
       } finally { clearTimeout(t2); }
     });
 
+    // ── Agente Loop: loop ilimitado de tool calls para os agentes n8n ──────────
+    // Recebe o openRouterBody já montado pelo Construir Prompt do n8n.
+    // Executa rounds LLM → tool → LLM até resposta final (max 10 rounds).
+    // Retorna { choices: [{ message: { content }, finish_reason }] } (formato OpenRouter).
+    webApp.post('/agent-loop', async (req, res) => {
+      const MAX_ITER = 10;
+      const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+      const apiKey = process.env.OPENROUTER_API_KEY ?? '';
+      const qdrantUrl = process.env.QDRANT_URL ?? 'http://localhost:6333';
+      const qdrantKey = process.env.QDRANT_API_KEY ?? '';
+      const embModel = process.env.OPENROUTER_EMBEDDING_MODEL ?? 'openai/text-embedding-3-small';
+
+      const body = req.body as {
+        openRouterBody?: unknown;
+        businessId?: string;
+        instance?: string;
+      };
+
+      let currentBody = body.openRouterBody as Record<string, unknown> | undefined;
+      if (!currentBody || typeof currentBody !== 'object') {
+        res.status(400).json({ error: 'openRouterBody required' });
+        return;
+      }
+
+      const businessId = String(body.businessId ?? body.instance ?? '');
+      const instance = String(body.instance ?? '');
+
+      let finalContent: string | null = null;
+      let iter = 0;
+
+      while (iter < MAX_ITER) {
+        iter++;
+
+        // 1. Chamar LLM
+        let llmData: Record<string, unknown>;
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 60_000);
+          try {
+            const r = await fetch(OPENROUTER_URL, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(currentBody),
+              signal: ctrl.signal,
+            });
+            llmData = await r.json() as Record<string, unknown>;
+          } finally {
+            clearTimeout(t);
+          }
+        } catch (e) {
+          finalContent = 'Desculpe, erro ao conectar com o assistente. Tente novamente.';
+          break;
+        }
+
+        type Choice = { finish_reason?: string; native_finish_reason?: string; message?: { content?: string; tool_calls?: Array<{ id: string; function?: { name: string; arguments: string } }> } };
+        const choice = (llmData.choices as Choice[] | undefined)?.[0];
+        const finishReason = choice?.finish_reason ?? '';
+        const nativeReason = choice?.native_finish_reason ?? '';
+
+        if (finishReason === 'error' || nativeReason.includes('MALFORMED')) {
+          finalContent = 'Desculpe, não consegui processar essa mensagem. Pode tentar novamente?';
+          break;
+        }
+
+        const toolCalls = choice?.message?.tool_calls ?? [];
+
+        // 2. Sem tool calls → resposta final
+        if (toolCalls.length === 0) {
+          finalContent = choice?.message?.content ?? (llmData.error as { message?: string } | undefined)?.message ?? 'Desculpe, erro interno.';
+          break;
+        }
+
+        // 3. Processar tool calls
+        const assistantMsg = choice!.message!;
+        const toolResultMsgs: Array<{ role: string; tool_call_id: string; content: string }> = [];
+
+        for (const tc of toolCalls) {
+          const toolName = tc.function?.name ?? '';
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.function?.arguments ?? '{}'); } catch { /* ignore */ }
+          let toolContent = '';
+
+          if (toolName === 'buscar_memoria') {
+            // Qdrant vector search
+            try {
+              const query = String(args.query ?? '');
+              const embCtrl = new AbortController();
+              const embT = setTimeout(() => embCtrl.abort(), 15_000);
+              let embedding: number[] = [];
+              try {
+                const embR = await fetch('https://openrouter.ai/api/v1/embeddings', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ model: embModel, input: query }),
+                  signal: embCtrl.signal,
+                });
+                const embData = await embR.json() as { data?: Array<{ embedding: number[] }> };
+                embedding = embData.data?.[0]?.embedding ?? [];
+              } finally { clearTimeout(embT); }
+
+              const qCtrl = new AbortController();
+              const qT = setTimeout(() => qCtrl.abort(), 10_000);
+              try {
+                const qHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+                if (qdrantKey) qHeaders['api-key'] = qdrantKey;
+                const qR = await fetch(`${qdrantUrl}/collections/vendly_intelligence/points/search`, {
+                  method: 'POST',
+                  headers: qHeaders,
+                  body: JSON.stringify({
+                    vector: embedding,
+                    limit: 5,
+                    with_payload: true,
+                    score_threshold: 0.35,
+                    filter: {
+                      should: [
+                        { key: 'businessId', match: { value: businessId } },
+                        { key: 'businessId', match: { value: 'global' } },
+                        { key: 'instance', match: { value: instance } },
+                        { key: 'instance', match: { value: 'global' } },
+                      ],
+                    },
+                  }),
+                  signal: qCtrl.signal,
+                });
+                const qData = await qR.json() as { result?: Array<{ score?: number; payload?: { content?: string; text?: string } }> };
+                const results = (qData.result ?? [])
+                  .filter(r => (r.score ?? 0) >= 0.35)
+                  .map(r => r.payload?.content || r.payload?.text || '')
+                  .filter(Boolean);
+                toolContent = results.length > 0
+                  ? results.join('\n\n')
+                  : 'Nenhuma informação relevante encontrada na base de conhecimento.';
+              } finally { clearTimeout(qT); }
+            } catch (e) {
+              toolContent = 'Erro ao buscar na base de conhecimento: ' + String(e);
+            }
+          } else {
+            // MCP tool (delivery_* e outros)
+            try {
+              const text = await routeTool(toolName, args);
+              // routeTool retorna JSON string no formato { ok, result } ou texto simples
+              try {
+                const parsed = JSON.parse(text) as { ok?: boolean; result?: unknown; error?: unknown };
+                if (parsed.ok === true) {
+                  toolContent = typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result);
+                } else if (parsed.ok === false) {
+                  toolContent = 'Erro ferramenta: ' + (parsed.error ? String(parsed.error) : JSON.stringify(parsed));
+                } else {
+                  toolContent = text;
+                }
+              } catch {
+                toolContent = text;
+              }
+            } catch (e) {
+              toolContent = 'Erro ao executar ' + toolName + ': ' + String(e);
+            }
+          }
+
+          toolResultMsgs.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
+        }
+
+        // 4. Atualizar mensagens para próximo round
+        const prevMessages: unknown[] = Array.isArray(currentBody.messages) ? currentBody.messages as unknown[] : [];
+        currentBody = {
+          ...currentBody,
+          messages: [...prevMessages, assistantMsg, ...toolResultMsgs],
+        };
+      }
+
+      if (!finalContent) {
+        finalContent = 'Desculpe, não consegui concluir. Pode tentar novamente?';
+      }
+
+      res.json({ choices: [{ message: { content: finalContent }, finish_reason: 'stop' }] });
+    });
+
     // REST direto de ferramentas (uso interno: N8N, scripts).
     // Bypassa o protocolo MCP (sem session/initialize) — chama o handler direto.
     // POST /tool/:name  body = arguments (objeto)
