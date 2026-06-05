@@ -16,6 +16,9 @@ AGENTE_LOOP_NODE = {
     "parameters": {
         "method": "POST",
         "url": "https://app.vendly.chat/agent-loop",
+        # Credencial OpenRouter reutilizada (passa Authorization: Bearer <key> no header)
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendBody": True,
         "specifyBody": "json",
         # openRouterBody e objeto, businessId vem do MongoDB GET Business, instance do payload
@@ -26,7 +29,13 @@ AGENTE_LOOP_NODE = {
                     "neverError": True
                 }
             },
-            "timeout": 90000  # 90s timeout para comportar multiplos rounds
+            "timeout": 90000
+        }
+    },
+    "credentials": {
+        "httpHeaderAuth": {
+            "id": "H0XlPAbxjEUzplW4",
+            "name": "OpenRouter"
         }
     }
 }

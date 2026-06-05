@@ -287,7 +287,10 @@ async function main() {
     webApp.post('/agent-loop', async (req, res) => {
       const MAX_ITER = 10;
       const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-      const apiKey = process.env.OPENROUTER_API_KEY ?? '';
+      // Aceita key via Authorization header (n8n passa credencial) ou env var
+      const authHeader = req.headers.authorization;
+      const apiKey = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
+        ?? process.env.OPENROUTER_API_KEY ?? '';
       const qdrantUrl = process.env.QDRANT_URL ?? 'http://localhost:6333';
       const qdrantKey = process.env.QDRANT_API_KEY ?? '';
       const embModel = process.env.OPENROUTER_EMBEDDING_MODEL ?? 'openai/text-embedding-3-small';
