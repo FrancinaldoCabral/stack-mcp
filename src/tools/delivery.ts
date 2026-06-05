@@ -74,14 +74,14 @@ function genOrderRef(): string {
   return `LT-${ts}-${rnd}`;
 }
 
-function formatOrderSummary(order: WithId<Document>): string {
+function formatOrderSummary(order: WithId<Document>, restaurantAddress?: string): string {
   const lines: string[] = [];
   lines.push(`*Pedido ${order.orderRef ?? order._id}*`);
   // externalCode: sempre presente — campo "Code" da plataforma de origem (iFood, Uber Eats, etc.)
-  // Mostrado mesmo se vazio para que entregadores saibam que o campo existe
   lines.push(`🔑 Code: ${order.externalCode ? String(order.externalCode) : '—'}`);
   if (order.clientName) lines.push(`Cliente: ${order.clientName}`);
-  if (order.clientAddress) lines.push(`Endereço: ${order.clientAddress}`);
+  if (order.clientAddress) lines.push(`📦 Entrega: ${order.clientAddress}`);
+  if (restaurantAddress) lines.push(`📍 Retirada: ${restaurantAddress}`);
   if (order.clientPhone) lines.push(`Telefone: ${order.clientPhone}`);
   if (Array.isArray(order.items) && order.items.length) {
     lines.push(`Itens:\n${order.items.map((it: unknown) => `  • ${String(it)}`).join('\n')}`);
@@ -204,7 +204,7 @@ export const deliveryTools: Tool[] = [
       required: ['orderId', 'status'],
       properties: {
         orderId: { type: 'string' },
-        status: { type: 'string', enum: ['rascunho', 'pendente', 'aceito', 'a_caminho', 'entregue', 'cancelado'] },
+        status: { type: 'string', enum: ['rascunho', 'em_espera', 'pendente', 'aceito', 'a_caminho', 'entregue', 'cancelado'] },
         note: { type: 'string', description: 'Observação a anexar e enviar ao grupo de comandos' },
         notifyCommandGroup: { type: 'boolean', description: 'Postar no grupo de comandos (default true)' },
       },
@@ -212,7 +212,7 @@ export const deliveryTools: Tool[] = [
   },
   {
     name: 'delivery_assign_deliverer',
-    description: 'Atribui um entregador a um pedido (somente se ainda sem entregador — controle de concorrência). Notifica automaticamente o grupo de comandos. Se o pedido já foi aceito por outro entregador, retorna {ok:false, alreadyTaken:true}.',
+    description: 'Atribui um entregador a um pedido (somente se ainda em_espera/pendente e sem entregador). Retorna {ok:false,alreadyTaken:true} se aceito por outro, {ok:false,alreadyBusy:true,currentOrderRef} se o entregador já tem pedido ativo. Notifica o grupo de comandos ao aceitar.',
     inputSchema: {
       type: 'object',
       required: ['orderId', 'delivererJid', 'delivererName'],
@@ -569,7 +569,7 @@ export async function handleDeliveryTool(
       }
       const order = await db.collection('delivery_orders').findOneAndUpdate(
         orderFilter,
-        { $set: { status: 'pendente', updatedAt: new Date() } },
+        { $set: { status: 'em_espera', updatedAt: new Date() } },
         { returnDocument: 'after', sort: { createdAt: -1 } },
       );
       if (!order) return json({ error: 'Pedido não encontrado ou não está em rascunho' });
@@ -591,11 +591,11 @@ export async function handleDeliveryTool(
       }
 
       const instance = await getRestaurantInstance(r);
-      // ↩️ instrução de reply é ESSENCIAL — o filtro mecânico do agente só ativa via WhatsApp reply
-      const text = `🆕 Novo pedido:\n\n${formatOrderSummary(order)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
+      const restaurantAddress = r.address ? String(r.address) : null;
+      const text = `🆕 Novo pedido:\n\n${formatOrderSummary(order, restaurantAddress ?? undefined)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
       const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
       const sent: Record<string, unknown> = {};
-      if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text.replace('\n\n_Quem aceita? *Responda esta mensagem* para pegar o pedido._', ''));
+      if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text);
       let delivererMsgId: string | null = null;
       if (r.delivererGroupJid) {
         // mentionsEveryOne=true: notifica todos os entregadores mesmo com grupo no silencioso
@@ -609,7 +609,7 @@ export async function handleDeliveryTool(
           );
         }
       }
-      return json({ ok: true, orderRef: order.orderRef, deliveryFee: order.deliveryFee, delivererMsgId, sent });
+      return json({ ok: true, orderRef: order.orderRef, status: 'em_espera', deliveryFee: order.deliveryFee, delivererMsgId, restaurantAddress, sent });
     }
 
     case 'delivery_update_order_status': {
@@ -664,6 +664,22 @@ export async function handleDeliveryTool(
         : { orderRef: rawId };
       const newDelivererJid = String(args.delivererJid);
 
+      // Trava anti-duplo: entregador não pode aceitar novo pedido com outro ativo
+      const existingActive = await db.collection('delivery_orders').findOne({
+        delivererJid: newDelivererJid,
+        status: { $in: ['aceito', 'a_caminho'] },
+      });
+      if (existingActive) {
+        return json({
+          ok: false,
+          alreadyBusy: true,
+          currentOrderRef: existingActive.orderRef ?? '',
+          currentOrderId: String(existingActive._id),
+          currentAddress: existingActive.clientAddress ?? '',
+          message: `Entregador já está com o pedido ${existingActive.orderRef} em andamento. Finalize ou cancele antes de aceitar um novo.`,
+        });
+      }
+
       const upd: Record<string, unknown> = {
         delivererJid: newDelivererJid,
         delivererName: String(args.delivererName),
@@ -672,15 +688,14 @@ export async function handleDeliveryTool(
       };
       if (args.etaMin != null) upd.etaMin = Number(args.etaMin);
 
-      // Atribuição atômica: só sucede se o pedido ainda não tem entregador
-      // (ou o mesmo entregador está re-confirmando sua atribuição)
+      // Atribuição atômica: só sucede se o pedido ainda está em_espera/pendente sem entregador
       const result = await db.collection('delivery_orders').findOneAndUpdate(
         {
           ...orderFilter,
           $or: [
-            { delivererJid: { $in: [null, undefined, '', newDelivererJid] } },
+            { delivererJid: { $in: [null, undefined, ''] } },
             { delivererJid: { $exists: false } },
-            { status: 'pendente' },
+            { status: { $in: ['pendente', 'em_espera'] } },
           ],
         },
         { $set: upd },
@@ -730,12 +745,12 @@ export async function handleDeliveryTool(
         return json({ error: 'Apenas o entregador atribuído pode cancelar este pedido', currentDelivererJid: current.delivererJid });
       }
 
-      // Volta ao status pendente, remove entregador
+      // Volta ao status em_espera (disponível novamente), remove entregador
       const released = await db.collection('delivery_orders').findOneAndUpdate(
         cancelOrderFilter,
         {
           $set: {
-            status: 'pendente',
+            status: 'em_espera',
             delivererJid: null,
             delivererName: null,
             etaMin: null,
@@ -747,7 +762,7 @@ export async function handleDeliveryTool(
       );
       if (!released) return json({ error: 'Falha ao cancelar pedido' });
 
-      // Notifica grupo de comandos do restaurante
+      // Notifica grupo de comandos e re-posta no grupo de entregadores
       try {
         const r = await getRestaurant(String(released.restaurantId));
         if (r) {
@@ -756,17 +771,23 @@ export async function handleDeliveryTool(
           if (cmdJid) {
             await sendToJid(instance, cmdJid, `⚠️ Entregador *${current.delivererName}* cancelou o pedido *${released.orderRef}*. Procurando novo entregador.`);
           }
-          // Re-posta no grupo de entregadores
           if (r.delivererGroupJid) {
             const dlvGrp = String(r.delivererGroupJid).trim();
-            const orderText = `🔄 Pedido *${released.orderRef}* disponível novamente!\n\n${formatOrderSummary(released)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
-            // mentionsEveryOne=true: re-abre para todos os entregadores com notificação
-            await sendToJid(instance, dlvGrp, orderText, undefined, undefined, true);
+            const restaurantAddress = r.address ? String(r.address) : undefined;
+            const orderText = `🔄 Pedido *${released.orderRef}* disponível novamente!\n\n${formatOrderSummary(released, restaurantAddress)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
+            const dlvSent = await sendToJid(instance, dlvGrp, orderText, undefined, undefined, true);
+            const newMsgId = extractMessageId(dlvSent);
+            if (newMsgId) {
+              await db.collection('delivery_orders').updateOne(
+                { _id: released._id },
+                { $set: { lastDelivererGroupMsgId: newMsgId, updatedAt: new Date() } },
+              );
+            }
           }
         }
       } catch { /* best-effort */ }
 
-      return json({ ok: true, orderRef: released.orderRef, status: 'pendente', reposted: true });
+      return json({ ok: true, orderRef: released.orderRef, status: 'em_espera', reposted: true });
     }
 
     case 'delivery_list_orders': {
