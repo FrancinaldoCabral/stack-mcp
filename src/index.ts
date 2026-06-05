@@ -280,6 +280,150 @@ async function main() {
       } finally { clearTimeout(t2); }
     });
 
+    // Agentic loop — executa LLM + tool calls em loop até resposta final (sem limite de rounds).
+    // Substitui a cadeia manual de rounds hardcoded no n8n.
+    // Recebe { openRouterBody, businessId, instance } do n8n via HTTP Request node.
+    // Retorna { choices: [{ message: { content }, finish_reason: 'stop' }] } — compatível com Parsear Chunks.
+    webApp.post('/agent-loop', async (req, res) => {
+      const MAX_ITER = 10;
+      const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+      const authHeader = req.headers.authorization;
+      const apiKey = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
+        ?? process.env.OPENROUTER_API_KEY ?? '';
+      const qdrantUrl = process.env.QDRANT_URL ?? 'http://localhost:6333';
+      const qdrantKey = process.env.QDRANT_API_KEY ?? '';
+      const embModel = process.env.OPENROUTER_EMBEDDING_MODEL ?? 'openai/text-embedding-3-small';
+
+      const payload = req.body as { openRouterBody?: unknown; businessId?: string; instance?: string };
+      let currentBody = payload.openRouterBody as Record<string, unknown> | undefined;
+      if (!currentBody || typeof currentBody !== 'object') {
+        res.status(400).json({ error: 'openRouterBody required' }); return;
+      }
+      const businessId = String(payload.businessId ?? payload.instance ?? '');
+      const instance = String(payload.instance ?? '');
+
+      let finalContent: string | null = null;
+
+      for (let iter = 0; iter < MAX_ITER; iter++) {
+        // Chamar LLM
+        let llmData: Record<string, unknown>;
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 60_000);
+          try {
+            const r = await fetch(OPENROUTER_URL, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(currentBody),
+              signal: ctrl.signal,
+            });
+            llmData = await r.json() as Record<string, unknown>;
+          } finally { clearTimeout(t); }
+        } catch (e) {
+          finalContent = 'Desculpe, erro ao conectar com o assistente. Tente novamente.';
+          break;
+        }
+
+        type LLMChoice = {
+          finish_reason?: string; native_finish_reason?: string;
+          message?: { content?: string; tool_calls?: Array<{ id: string; function?: { name: string; arguments: string } }> };
+        };
+        const choice = (llmData.choices as LLMChoice[] | undefined)?.[0];
+        const finish = choice?.finish_reason ?? '';
+        const native = choice?.native_finish_reason ?? '';
+
+        if (finish === 'error' || native.includes('MALFORMED')) {
+          finalContent = 'Desculpe, não consegui processar essa mensagem. Pode tentar novamente?';
+          break;
+        }
+
+        const toolCalls = choice?.message?.tool_calls ?? [];
+
+        // Sem tool calls → resposta final
+        if (toolCalls.length === 0) {
+          finalContent = choice?.message?.content
+            ?? (llmData.error as { message?: string } | undefined)?.message
+            ?? 'Desculpe, erro interno.';
+          break;
+        }
+
+        // Executar tool calls e acumular resultados
+        const assistantMsg = choice!.message!;
+        const toolResults: Array<{ role: string; tool_call_id: string; content: string }> = [];
+
+        for (const tc of toolCalls) {
+          const toolName = tc.function?.name ?? '';
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.function?.arguments ?? '{}'); } catch { /**/ }
+          let content = '';
+
+          if (toolName === 'buscar_memoria') {
+            try {
+              const query = String(args.query ?? '');
+              const embCtrl = new AbortController();
+              const et = setTimeout(() => embCtrl.abort(), 15_000);
+              let embedding: number[] = [];
+              try {
+                const er = await fetch('https://openrouter.ai/api/v1/embeddings', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ model: embModel, input: query }),
+                  signal: embCtrl.signal,
+                });
+                const ed = await er.json() as { data?: Array<{ embedding: number[] }> };
+                embedding = ed.data?.[0]?.embedding ?? [];
+              } finally { clearTimeout(et); }
+
+              const qCtrl = new AbortController();
+              const qt = setTimeout(() => qCtrl.abort(), 10_000);
+              try {
+                const qh: Record<string, string> = { 'Content-Type': 'application/json' };
+                if (qdrantKey) qh['api-key'] = qdrantKey;
+                const qr = await fetch(`${qdrantUrl}/collections/vendly_intelligence/points/search`, {
+                  method: 'POST', headers: qh, signal: qCtrl.signal,
+                  body: JSON.stringify({
+                    vector: embedding, limit: 5, with_payload: true, score_threshold: 0.35,
+                    filter: { should: [
+                      { key: 'businessId', match: { value: businessId } },
+                      { key: 'businessId', match: { value: 'global' } },
+                      { key: 'instance', match: { value: instance } },
+                      { key: 'instance', match: { value: 'global' } },
+                    ]},
+                  }),
+                });
+                const qd = await qr.json() as { result?: Array<{ score?: number; payload?: { content?: string; text?: string } }> };
+                const hits = (qd.result ?? [])
+                  .filter(r => (r.score ?? 0) >= 0.35)
+                  .map(r => r.payload?.content || r.payload?.text || '')
+                  .filter(Boolean);
+                content = hits.length > 0 ? hits.join('\n\n') : 'Nenhuma informação relevante encontrada.';
+              } finally { clearTimeout(qt); }
+            } catch (e) { content = 'Erro ao buscar na base de conhecimento: ' + String(e); }
+          } else {
+            try {
+              const text = await routeTool(toolName, args);
+              try {
+                const p = JSON.parse(text) as { ok?: boolean; result?: unknown; error?: unknown };
+                content = p.ok === true
+                  ? (typeof p.result === 'string' ? p.result : JSON.stringify(p.result))
+                  : p.ok === false
+                    ? 'Erro ferramenta: ' + String(p.error ?? JSON.stringify(p))
+                    : text;
+              } catch { content = text; }
+            } catch (e) { content = 'Erro ao executar ' + toolName + ': ' + String(e); }
+          }
+
+          toolResults.push({ role: 'tool', tool_call_id: tc.id, content });
+        }
+
+        // Próximo round com o contexto acumulado
+        const prevMsgs: unknown[] = Array.isArray(currentBody.messages) ? currentBody.messages as unknown[] : [];
+        currentBody = { ...currentBody, messages: [...prevMsgs, assistantMsg, ...toolResults] };
+      }
+
+      res.json({ choices: [{ message: { content: finalContent ?? 'Desculpe, não consegui concluir. Tente novamente.' }, finish_reason: 'stop' }] });
+    });
+
     // REST direto de ferramentas (uso interno: N8N, scripts).
     // Bypassa o protocolo MCP (sem session/initialize) — chama o handler direto.
     // POST /tool/:name  body = arguments (objeto)
