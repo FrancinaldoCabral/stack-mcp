@@ -344,10 +344,10 @@ async function main() {
             let toolCallsMade = false;
             const ctxLog = [];
             // Auto-inject: contexto de pedidos para grupo de entregadores
-            if (vendlyCtx?.personaKey === 'deliverer' && vendlyCtx?.restaurantId) {
+            if (vendlyCtx?.personaKey === 'deliverer') {
                 try {
                     const ctxArgs = {
-                        restaurantId: vendlyCtx.restaurantId,
+                        restaurantId: vendlyCtx.restaurantId ?? '', // vazio = todos os restaurantes
                         senderPhone: vendlyCtx.senderPhone ?? '',
                     };
                     if (vendlyCtx.instance)

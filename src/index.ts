@@ -322,10 +322,10 @@ async function main() {
       const ctxLog: string[] = [];
 
       // Auto-inject: contexto de pedidos para grupo de entregadores
-      if (vendlyCtx?.personaKey === 'deliverer' && vendlyCtx?.restaurantId) {
+      if (vendlyCtx?.personaKey === 'deliverer') {
         try {
           const ctxArgs: Record<string, unknown> = {
-            restaurantId: vendlyCtx.restaurantId,
+            restaurantId: vendlyCtx.restaurantId ?? '',  // vazio = todos os restaurantes
             senderPhone: vendlyCtx.senderPhone ?? '',
           };
           if (vendlyCtx.instance) ctxArgs.instance = vendlyCtx.instance;

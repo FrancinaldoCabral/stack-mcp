@@ -141,11 +141,13 @@ if (__extraTools.length > 0) {
 const __openRouterBody = { model: __model, messages, temperature: 0.8, tools: [...__baseTools, ...__extraTools], tool_choice: __toolChoice }; // objeto, não string — N8N serializa internamente
 
 // Contexto para grupo de entregadores — processado pelo backend /agent-loop, não exposto ao agente
-if (__deliveryCtx.personaKey === 'deliverer' && __deliveryCtx.restaurantId) {
+if (__deliveryCtx.personaKey === 'deliverer') {
+  // senderJid = JID do participante (ex: 5521969435536@s.whatsapp.net), msg.telefone = JID do grupo
+  const __senderPhone = String(__deliveryCtx.senderJid || msg.telefone || '').replace(/@[^@]+$/, '').replace(/\D/g, '');
   __openRouterBody._vendlyCtx = {
     personaKey: 'deliverer',
-    restaurantId: __deliveryCtx.restaurantId,
-    senderPhone: String(msg.telefone || '').replace(/\D/g, ''),
+    restaurantId: '',  // vazio = sem filtro: entregadores servem TODOS os restaurantes do business
+    senderPhone: __senderPhone,
     instance: msg.instance || null,
     waExternalId: msg.wa_msg_id || null,
   };
