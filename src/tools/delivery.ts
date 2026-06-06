@@ -829,7 +829,10 @@ export async function handleDeliveryTool(
     case 'delivery_deliverer_context': {
       const rId = String(args.restaurantId ?? '');
       const sPhone = String(args.senderPhone ?? '').replace(/\D/g, '');
-      const replyId = args.replyToExternalId ? String(args.replyToExternalId) : null;
+      // Chatwoot armazena source_id com prefixo "WAID:" mas Evolution grava sem ele
+      const replyId = args.replyToExternalId
+        ? String(args.replyToExternalId).replace(/^WAID:/, '')
+        : null;
       const digits = (s: unknown) => String(s ?? '').replace(/@[^@]+$/, '').replace(/\D/g, '');
 
       const ACTIVE_STATUSES = ['em_espera', 'pendente', 'aceito', 'a_caminho'];
