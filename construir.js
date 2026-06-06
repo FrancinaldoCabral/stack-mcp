@@ -140,4 +140,15 @@ if (__extraTools.length > 0) {
 }
 const __openRouterBody = { model: __model, messages, temperature: 0.8, tools: [...__baseTools, ...__extraTools], tool_choice: __toolChoice }; // objeto, não string — N8N serializa internamente
 
+// Contexto para grupo de entregadores — processado pelo backend /agent-loop, não exposto ao agente
+if (__deliveryCtx.personaKey === 'deliverer' && __deliveryCtx.restaurantId) {
+  __openRouterBody._vendlyCtx = {
+    personaKey: 'deliverer',
+    restaurantId: __deliveryCtx.restaurantId,
+    senderPhone: String(msg.telefone || '').replace(/\D/g, ''),
+    instance: msg.instance || null,
+    waExternalId: msg.wa_msg_id || null,
+  };
+}
+
 return [{ json: { ...msg, messages, historico, respondWithAudio, toolsAllowed: __deliveryCtx.toolsAllowed || [], restaurantId: __deliveryCtx.restaurantId || null, openRouterBody: __openRouterBody, model: __model } }];

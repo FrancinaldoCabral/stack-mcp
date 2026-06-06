@@ -346,11 +346,15 @@ async function main() {
             // Auto-inject: contexto de pedidos para grupo de entregadores
             if (vendlyCtx?.personaKey === 'deliverer' && vendlyCtx?.restaurantId) {
                 try {
-                    const ctxText = await routeTool('delivery_deliverer_context', {
+                    const ctxArgs = {
                         restaurantId: vendlyCtx.restaurantId,
                         senderPhone: vendlyCtx.senderPhone ?? '',
-                        ...(vendlyCtx.replyToExternalId ? { replyToExternalId: vendlyCtx.replyToExternalId } : {}),
-                    });
+                    };
+                    if (vendlyCtx.instance)
+                        ctxArgs.instance = vendlyCtx.instance;
+                    if (vendlyCtx.waExternalId)
+                        ctxArgs.waExternalId = vendlyCtx.waExternalId;
+                    const ctxText = await routeTool('delivery_deliverer_context', ctxArgs);
                     const parsed = JSON.parse(ctxText);
                     if (parsed.ok && parsed.activeOrdersCtx) {
                         const msgs = Array.isArray(currentBody.messages)
@@ -359,7 +363,7 @@ async function main() {
                         const sysMsg = msgs.find((m) => m.role === 'system');
                         if (sysMsg && typeof sysMsg.content === 'string') {
                             sysMsg.content += parsed.activeOrdersCtx;
-                            console.log(`[agent-loop] deliverer-ctx injected reply=${vendlyCtx.replyToExternalId ?? 'none'}`);
+                            console.log(`[agent-loop] deliverer-ctx injected waExtId=${vendlyCtx.waExternalId ?? 'none'}`);
                         }
                     }
                 }

@@ -17,6 +17,21 @@ const evolution = () =>
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// Busca contextInfo.stanzaId recursivamente em qualquer tipo de mensagem WhatsApp
+function findContextInfo(obj: unknown): { stanzaId?: string } | null {
+  if (!obj || typeof obj !== 'object') return null;
+  const o = obj as Record<string, unknown>;
+  if ('stanzaId' in o) return o as { stanzaId?: string };
+  if ('contextInfo' in o && o.contextInfo) return findContextInfo(o.contextInfo);
+  for (const v of Object.values(o)) {
+    if (v && typeof v === 'object') {
+      const found = findContextInfo(v);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 async function getRestaurant(id: string): Promise<WithId<Document> | null> {
   const db = await getDb();
   return db.collection('delivery_restaurants').findOne({ _id: new ObjectId(id) });
@@ -261,7 +276,9 @@ export const deliveryTools: Tool[] = [
       properties: {
         restaurantId: { type: 'string' },
         senderPhone: { type: 'string', description: 'Dígitos puros do número do entregador' },
-        replyToExternalId: { type: 'string', description: 'ID da mensagem respondida (reply_to_external_id do webhook)' },
+        replyToExternalId: { type: 'string', description: 'ID da mensagem respondida (fallback quando instance/waExternalId não fornecidos)' },
+        instance: { type: 'string', description: 'Nome da instância Evolution — usado para lookup do stanzaId via Evolution API' },
+        waExternalId: { type: 'string', description: 'StanzaId da mensagem do entregador (Chatwoot source_id) — backend extrai o quoted stanzaId via Evolution' },
       },
     },
   },
@@ -829,11 +846,31 @@ export async function handleDeliveryTool(
     case 'delivery_deliverer_context': {
       const rId = String(args.restaurantId ?? '');
       const sPhone = String(args.senderPhone ?? '').replace(/\D/g, '');
-      // Chatwoot armazena source_id com prefixo "WAID:" mas Evolution grava sem ele
-      const replyId = args.replyToExternalId
-        ? String(args.replyToExternalId).replace(/^WAID:/, '')
-        : null;
       const digits = (s: unknown) => String(s ?? '').replace(/@[^@]+$/, '').replace(/\D/g, '');
+
+      // Resolve replyId: 1) via Evolution lookup (confiável, usa stanzaId exato)
+      //                  2) fallback para replyToExternalId (mensagem direta)
+      let replyId: string | null = null;
+      if (args.instance && args.waExternalId) {
+        try {
+          const evo = evolution();
+          const evoRes = await evo.post(`/chat/findMessages/${String(args.instance)}`, {
+            where: { key: { id: String(args.waExternalId) } },
+          });
+          const records: unknown[] = evoRes.data?.messages?.records
+            ?? (Array.isArray(evoRes.data) ? evoRes.data : []);
+          const firstRecord = records[0] as Record<string, unknown> | undefined;
+          // contextInfo pode estar no top-level do record OU aninhado dentro de message.*
+          const ctxInfo = findContextInfo(firstRecord?.contextInfo)
+            ?? findContextInfo(firstRecord?.message);
+          if (ctxInfo?.stanzaId) replyId = String(ctxInfo.stanzaId);
+        } catch (e) {
+          console.error('[delivery_deliverer_context] evolution lookup failed:', String(e));
+        }
+      }
+      if (!replyId && args.replyToExternalId) {
+        replyId = String(args.replyToExternalId).replace(/^WAID:/, '');
+      }
 
       const ACTIVE_STATUSES = ['em_espera', 'pendente', 'aceito', 'a_caminho'];
       const filter: Record<string, unknown> = { status: { $in: ACTIVE_STATUSES } };

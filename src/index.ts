@@ -304,12 +304,48 @@ async function main() {
       const businessId = String(payload.businessId ?? payload.instance ?? '');
       const instance = String(payload.instance ?? '');
 
+      // Extrair _vendlyCtx antes de enviar ao OpenRouter (campo desconhecido seria rejeitado)
+      const vendlyCtx = (currentBody as Record<string, unknown>)._vendlyCtx as {
+        personaKey?: string;
+        restaurantId?: string;
+        senderPhone?: string;
+        instance?: string | null;
+        waExternalId?: string | null;
+      } | undefined;
+      if (vendlyCtx) delete (currentBody as Record<string, unknown>)._vendlyCtx;
+
       const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL ?? 'google/gemini-3.1-flash-lite';
       let modelInUse = String((currentBody as Record<string,unknown>).model ?? 'unknown');
       const originalBody = { ...currentBody };
       let finalContent: string | null = null;
       let toolCallsMade = false;
       const ctxLog: string[] = [];
+
+      // Auto-inject: contexto de pedidos para grupo de entregadores
+      if (vendlyCtx?.personaKey === 'deliverer' && vendlyCtx?.restaurantId) {
+        try {
+          const ctxArgs: Record<string, unknown> = {
+            restaurantId: vendlyCtx.restaurantId,
+            senderPhone: vendlyCtx.senderPhone ?? '',
+          };
+          if (vendlyCtx.instance) ctxArgs.instance = vendlyCtx.instance;
+          if (vendlyCtx.waExternalId) ctxArgs.waExternalId = vendlyCtx.waExternalId;
+          const ctxText = await routeTool('delivery_deliverer_context', ctxArgs);
+          const parsed = JSON.parse(ctxText) as { ok?: boolean; activeOrdersCtx?: string };
+          if (parsed.ok && parsed.activeOrdersCtx) {
+            const msgs = Array.isArray(currentBody.messages)
+              ? (currentBody.messages as Array<Record<string, unknown>>)
+              : [];
+            const sysMsg = msgs.find((m) => m.role === 'system');
+            if (sysMsg && typeof sysMsg.content === 'string') {
+              sysMsg.content += parsed.activeOrdersCtx;
+              console.log(`[agent-loop] deliverer-ctx injected waExtId=${vendlyCtx.waExternalId ?? 'none'}`);
+            }
+          }
+        } catch (e) {
+          console.error('[agent-loop] deliverer-ctx auto-inject failed:', String(e));
+        }
+      }
 
       for (let iter = 0; iter < MAX_ITER; iter++) {
         const msgs = Array.isArray(currentBody.messages) ? currentBody.messages as unknown[] : [];
