@@ -50,7 +50,7 @@ async function sendToJid(instance, jid, text, mentionedList, quotedMessageId, me
     const http = evolution();
     const body = { number: jid, text, delay: 500 };
     if (mentionedList?.length)
-        body.mentionedList = mentionedList;
+        body.mentioned = mentionedList;
     if (mentionsEveryOne)
         body.mentionsEveryOne = true;
     if (quotedMessageId)
@@ -205,7 +205,7 @@ export const deliveryTools = [
     },
     {
         name: 'delivery_update_order_status',
-        description: 'Atualiza status de um pedido existente. Por padrão também posta atualização no grupo de comandos do restaurante (espelhamento entregador → restaurante).',
+        description: 'Atualiza status de um pedido existente. JÁ posta automaticamente a atualização no grupo de comandos do restaurante — NÃO é necessário chamar delivery_post_to_command_group depois disso.',
         inputSchema: {
             type: 'object',
             required: ['orderId', 'status'],
@@ -304,7 +304,7 @@ export const deliveryTools = [
     },
     {
         name: 'delivery_post_to_command_group',
-        description: 'Envia mensagem ao grupo (ou contato) de comandos do restaurante. Use para espelhar comunicações importantes do entregador para o restaurante.',
+        description: 'Envia mensagem LIVRE ao grupo de comandos do restaurante. Use apenas para comunicados que NÃO sejam atualização de status (delivery_update_order_status já faz isso). Evite chamar após delivery_update_order_status para não duplicar mensagens.',
         inputSchema: {
             type: 'object',
             required: ['restaurantId', 'message'],

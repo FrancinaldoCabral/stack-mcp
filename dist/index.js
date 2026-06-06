@@ -343,7 +343,6 @@ async function main() {
         // Recebe { openRouterBody, businessId, instance } do n8n via HTTP Request node.
         // Retorna { choices: [{ message: { content }, finish_reason: 'stop' }] } — compatível com Parsear Chunks.
         webApp.post('/agent-loop', async (req, res) => {
-            const MAX_ITER = 10;
             const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
             const authHeader = req.headers.authorization;
             const apiKey = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
@@ -363,6 +362,9 @@ async function main() {
             const vendlyCtx = currentBody._vendlyCtx;
             if (vendlyCtx)
                 delete currentBody._vendlyCtx;
+            // Deliverer precisa de no máximo: lookup + update_status + resposta = 3 rounds.
+            // Limitar a 4 previne envio excessivo de mensagens quando o LLM fica em loop de tools.
+            const MAX_ITER = vendlyCtx?.personaKey === 'deliverer' ? 4 : 10;
             const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL ?? 'google/gemini-3.1-flash-lite';
             let modelInUse = String(currentBody.model ?? 'unknown');
             const originalBody = { ...currentBody };
@@ -409,12 +411,14 @@ async function main() {
                         : [];
                     const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
                     const msgText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
-                    // @menção do agente: @<phone_digits> no texto da mensagem
+                    // @menção do agente: @<phone_digits> no texto da mensagem.
+                    // Fail-closed: sem agentPhone, não processa — evita loop quando msg do bot
+                    // (com @entregadorPhone) voltar via Evolution sync como incoming no Chatwoot.
                     const hasMentionOfAgent = agentPhone
                         ? msgText.includes(`@${agentPhone}`)
-                        : /@\d{7,}/.test(msgText); // fallback se phone não disponível
+                        : false;
                     if (!hasMentionOfAgent) {
-                        console.log(`[agent-loop] deliverer pre-filter SKIP: no order reply, no agent mention (instance=${vendlyCtx.instance ?? 'none'})`);
+                        console.log(`[agent-loop] deliverer pre-filter SKIP: no order reply, no agent mention (instance=${vendlyCtx.instance ?? 'none'} agentPhone=${agentPhone ?? 'unknown'})`);
                         res.json({ choices: [{ message: { content: '[SKIP]' }, finish_reason: 'stop' }], tool_calls_made: false });
                         return;
                     }
