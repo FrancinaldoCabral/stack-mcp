@@ -302,9 +302,11 @@ async function main() {
       const businessId = String(payload.businessId ?? payload.instance ?? '');
       const instance = String(payload.instance ?? '');
 
+      const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL ?? 'google/gemini-2.5-flash-preview-05-20';
+      let modelInUse = String((currentBody as Record<string,unknown>).model ?? 'unknown');
+      const originalBody = { ...currentBody };
       let finalContent: string | null = null;
       let toolCallsMade = false;
-      const model = String((currentBody as Record<string,unknown>).model ?? 'unknown');
       const ctxLog: string[] = [];
 
       for (let iter = 0; iter < MAX_ITER; iter++) {
@@ -329,7 +331,7 @@ async function main() {
             llmData = await r.json() as Record<string, unknown>;
           } finally { clearTimeout(t); }
         } catch (e) {
-          console.error(`[agent-loop] model=${model} iter=${iter} ctx=${ctxLog.join(',')} FETCH_ERROR:`, String(e));
+          console.error(`[agent-loop] model=${modelInUse} iter=${iter} ctx=${ctxLog.join(',')} FETCH_ERROR:`, String(e));
           finalContent = 'Desculpe, erro ao conectar com o assistente. Tente novamente.';
           break;
         }
@@ -338,9 +340,21 @@ async function main() {
           finish_reason?: string; native_finish_reason?: string;
           message?: { content?: string; tool_calls?: Array<{ id: string; function?: { name: string; arguments: string } }> };
         };
-        // Erro direto do provider — logar o payload bruto para diagnóstico
+        // Erro direto do provider — tentar fallback model antes de desistir
         if (llmData.error || !llmData.choices) {
-          console.error(`[agent-loop] PROVIDER_ERROR model=${model} iter=${iter} http=${httpStatus} ctx=${ctxLog.join(',')} payload=${JSON.stringify(llmData).slice(0, 500)}`);
+          const errPayload = JSON.stringify(llmData).slice(0, 500);
+          console.error(`[agent-loop] PROVIDER_ERROR model=${modelInUse} iter=${iter} http=${httpStatus} ctx=${ctxLog.join(',')} payload=${errPayload}`);
+
+          if (modelInUse !== FALLBACK_MODEL) {
+            console.error(`[agent-loop] Switching to fallback model ${FALLBACK_MODEL}`);
+            modelInUse = FALLBACK_MODEL;
+            currentBody = { ...originalBody, model: FALLBACK_MODEL };
+            iter = -1;
+            ctxLog.length = 0;
+            toolCallsMade = false;
+            continue;
+          }
+
           finalContent = 'Desculpe, não consegui processar essa mensagem agora. Pode tentar novamente?';
           break;
         }
@@ -367,7 +381,7 @@ async function main() {
         const assistantMsg = choice!.message!;
         const toolResults: Array<{ role: string; tool_call_id: string; content: string }> = [];
         const toolNames = toolCalls.map(tc => tc.function?.name ?? '?').join(',');
-        console.log(`[agent-loop] model=${model} iter=${iter} ctx=${ctxChars}chars tools=[${toolNames}]`);
+        console.log(`[agent-loop] model=${modelInUse} iter=${iter} ctx=${ctxChars}chars tools=[${toolNames}]`);
 
         for (const tc of toolCalls) {
           const toolName = tc.function?.name ?? '';
@@ -431,6 +445,11 @@ async function main() {
             } catch (e) { content = 'Erro ao executar ' + toolName + ': ' + String(e); }
           }
 
+          const MAX_TOOL_RESULT = 3000;
+          if (content.length > MAX_TOOL_RESULT) {
+            console.warn(`[agent-loop] tool=${toolName} result truncado ${content.length}->${MAX_TOOL_RESULT}chars`);
+            content = content.slice(0, MAX_TOOL_RESULT) + '\n[resultado truncado]';
+          }
           console.log(`[agent-loop]   tool=${toolName} result=${content.length}chars`);
           toolResults.push({ role: 'tool', tool_call_id: tc.id, content });
         }
