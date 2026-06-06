@@ -187,6 +187,7 @@ export const deliveryTools: Tool[] = [
         orderId: { type: 'string', description: 'ID do rascunho. Omita para usar o rascunho mais recente do restaurante.' },
         restaurantId: { type: 'string', description: 'Necessário apenas se orderId não for informado (para localizar o rascunho).' },
         crossPost: { type: 'boolean', description: 'Também postar no grupo de entregadores (default false)' },
+        confirmedByJid: { type: 'string', description: 'JID WhatsApp de quem confirmou o pedido no grupo restaurante (ex: 5521xxx@s.whatsapp.net). Usado para incluir contato no anúncio para os entregadores.' },
       },
     },
   },
@@ -527,6 +528,7 @@ export async function handleDeliveryTool(
         orderRef: genOrderRef(),
         restaurantId: String(r._id),
         restaurantName: r.name,
+        restaurantAddress: (r.address as string | undefined) ?? '',
         businessId: r.businessId ?? null,
         clientName: args.clientName ?? '',
         clientAddress: args.clientAddress ?? '',
@@ -622,14 +624,42 @@ export async function handleDeliveryTool(
 
       const instance = await getRestaurantInstance(r);
       const restaurantAddress = r.address ? String(r.address) : null;
-      const text = `🆕 Novo pedido:\n\n${formatOrderSummary(order, restaurantAddress ?? undefined)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
+
+      // Salva endereço do restaurante no pedido para uso futuro sem join
+      if (restaurantAddress) {
+        await db.collection('delivery_orders').updateOne(
+          { _id: order._id },
+          { $set: { restaurantAddress, updatedAt: new Date() } },
+        );
+        order.restaurantAddress = restaurantAddress;
+      }
+
+      const confirmedByJid = args.confirmedByJid ? String(args.confirmedByJid) : null;
+      const confirmedPhone = confirmedByJid ? confirmedByJid.replace(/@[^@]+$/, '') : null;
+
+      // Salva confirmedByJid no pedido
+      if (confirmedByJid) {
+        await db.collection('delivery_orders').updateOne(
+          { _id: order._id },
+          { $set: { confirmedByJid, updatedAt: new Date() } },
+        );
+        order.confirmedByJid = confirmedByJid;
+      }
+
+      const baseText = `🆕 Novo pedido:\n\n${formatOrderSummary(order, restaurantAddress ?? undefined)}\n\n↩️ *Responda esta mensagem* para aceitar.`;
+      // Anúncio para entregadores inclui contato do restaurante
+      const delivererText = confirmedPhone
+        ? `${baseText}\n\n📱 Dúvidas? Contato restaurante: @${confirmedPhone}`
+        : baseText;
+
       const cmdJid = String((r.commandJid ?? r.commandGroupJid) ?? '').trim();
       const sent: Record<string, unknown> = {};
-      if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, text);
+      if (cmdJid) sent.commandGroup = await sendToJid(instance, cmdJid, baseText);
       let delivererMsgId: string | null = null;
       if (r.delivererGroupJid) {
         // mentionsEveryOne=true: notifica todos os entregadores mesmo com grupo no silencioso
-        const dlvSent = await sendToJid(instance, String(r.delivererGroupJid), text, undefined, undefined, true);
+        const dlvMentions = confirmedByJid ? [confirmedByJid] : undefined;
+        const dlvSent = await sendToJid(instance, String(r.delivererGroupJid), delivererText, dlvMentions, undefined, true);
         sent.delivererGroup = dlvSent;
         delivererMsgId = extractMessageId(dlvSent);
         if (delivererMsgId) {
@@ -745,7 +775,7 @@ export async function handleDeliveryTool(
         });
       }
 
-      // Notifica grupo de comandos do restaurante
+      // Notifica grupo de comandos do restaurante com contato do entregador
       try {
         const r = await getRestaurant(String(result.restaurantId));
         if (r) {
@@ -753,8 +783,9 @@ export async function handleDeliveryTool(
           if (cmdJid) {
             const instance = await getRestaurantInstance(r);
             const eta = args.etaMin != null ? ` (~${args.etaMin} min)` : '';
-            const notifText = `🛵 Entregador *${args.delivererName}* assumiu o pedido *${result.orderRef ?? result._id}*${eta}`;
-            await sendToJid(instance, cmdJid, notifText);
+            const delivererPhone = newDelivererJid.replace(/@[^@]+$/, '');
+            const notifText = `🛵 Entregador *${args.delivererName}* assumiu o pedido *${result.orderRef ?? result._id}*${eta}\n📱 Contato: @${delivererPhone}`;
+            await sendToJid(instance, cmdJid, notifText, [newDelivererJid]);
           }
         }
       } catch { /* best-effort */ }
@@ -880,13 +911,23 @@ export async function handleDeliveryTool(
         .sort({ createdAt: -1 }).limit(50).toArray();
 
       const fmtOrder = (o: Record<string, unknown>, tag?: string) => {
-        const ref = String(o.orderRef ?? o._id ?? '');
-        const oid = String(o._id ?? '');
-        const status = String(o.status ?? '').toUpperCase();
-        const client = String(o.clientName ?? '?');
-        const addr = String(o.clientAddress ?? '?').slice(0, 60);
-        const dlv = o.delivererName ? ` | Entregador: ${o.delivererName}` : '';
-        const base = `orderRef=${ref} orderId=${oid} | ${status} | Cliente: ${client} | End: ${addr}${dlv}`;
+        const ref   = String(o.orderRef ?? o._id ?? '');
+        const oid   = String(o._id ?? '');
+        const status= String(o.status ?? '').toUpperCase();
+        const client= String(o.clientName ?? '?');
+        const addr  = String(o.clientAddress ?? '?').slice(0, 80);
+        const phone = o.clientPhone ? ` Tel:${o.clientPhone}` : '';
+        const rest  = o.restaurantName ? ` | Restaurante: ${o.restaurantName}` : '';
+        const pickup= o.restaurantAddress ? ` | Retirada: ${String(o.restaurantAddress).slice(0, 60)}` : '';
+        const val   = o.value != null ? ` | Valor: R$${Number(o.value).toFixed(2)}` : '';
+        const fee   = o.deliveryFee != null ? ` Taxa: R$${Number(o.deliveryFee).toFixed(2)}` : '';
+        const dist  = o.distanceKm != null ? ` (${Number(o.distanceKm).toFixed(1)}km)` : '';
+        const dlv   = o.delivererName ? ` | Entregador: ${o.delivererName}` : '';
+        const items = Array.isArray(o.items) && o.items.length
+          ? ` | Itens: ${(o.items as string[]).slice(0, 3).join(', ')}` : '';
+        const restContact = o.confirmedByJid
+          ? ` | Contato restaurante: @${String(o.confirmedByJid).replace(/@[^@]+$/, '')}` : '';
+        const base = `orderRef=${ref} orderId=${oid} | ${status} | Cliente: ${client}${phone} | End: ${addr}${rest}${pickup}${val}${fee}${dist}${dlv}${items}${restContact}`;
         return tag ? `[${tag}] ${base}` : base;
       };
 

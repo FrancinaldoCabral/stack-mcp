@@ -140,6 +140,8 @@ export interface DeliveryOrder {
   externalCode?: string;
   restaurantId: string;
   restaurantName: string;
+  restaurantAddress?: string;
+  confirmedByJid?: string;
   orderNumber?: number;
   clientName?: string;
   clientAddress?: string;
@@ -152,7 +154,7 @@ export interface DeliveryOrder {
   paymentMethod?: string;
   delivererJid?: string;
   delivererName?: string;
-  status: 'rascunho' | 'pendente' | 'atribuido' | 'aceito' | 'a_caminho' | 'no_restaurante' | 'saindo' | 'no_cliente' | 'entregue' | 'problema' | 'cancelado';
+  status: 'rascunho' | 'em_espera' | 'pendente' | 'atribuido' | 'aceito' | 'a_caminho' | 'no_restaurante' | 'saindo' | 'no_cliente' | 'entregue' | 'problema' | 'cancelado';
   settlement?: 'acertado' | 'sem_acertar' | 'pendente';
   timestamps?: Record<string, string>;
   createdAt: string;

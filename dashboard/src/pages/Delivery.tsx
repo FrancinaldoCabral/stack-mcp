@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined,
+  WhatsAppOutlined, CopyOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -18,13 +19,17 @@ import dayjs from 'dayjs';
 const { Title, Text } = Typography;
 
 const ORDER_STATUS: Record<string, { color: string; label: string }> = {
+  rascunho:       { color: 'default',  label: 'Rascunho' },
+  em_espera:      { color: 'gold',     label: 'Em Espera' },
   pendente:       { color: 'orange',   label: 'Pendente' },
+  aceito:         { color: 'blue',     label: 'Aceito' },
   atribuido:      { color: 'blue',     label: 'Atribuído' },
   a_caminho:      { color: 'geekblue', label: 'A Caminho' },
   no_restaurante: { color: 'purple',   label: 'No Restaurante' },
   saindo:         { color: 'cyan',     label: 'Saindo' },
   no_cliente:     { color: 'gold',     label: 'No Cliente' },
   entregue:       { color: 'green',    label: 'Entregue' },
+  cancelado:      { color: 'red',      label: 'Cancelado' },
   problema:       { color: 'red',      label: 'Problema' },
 };
 
@@ -263,6 +268,29 @@ export function RestaurantsTab() {
 
 // ── Pedidos ───────────────────────────────────────────────────────────────────
 
+/** Extrai dígitos de um JID ou telefone e retorna o link wa.me, ou null se inválido. */
+function waLink(jidOrPhone?: string | null): string | null {
+  const digits = String(jidOrPhone ?? '').replace(/@[^@]+$/, '').replace(/\D/g, '');
+  return digits.length >= 7 ? `https://wa.me/${digits}` : null;
+}
+
+/** Botão pequeno de WhatsApp que abre o link em nova aba. */
+function WaBtn({ jid, label }: { jid?: string | null; label?: string }) {
+  const href = waLink(jid);
+  if (!href) return null;
+  return (
+    <a href={href} target="_blank" rel="noreferrer">
+      <Button
+        size="small"
+        type="text"
+        icon={<WhatsAppOutlined style={{ color: '#25D366' }} />}
+        style={{ padding: '0 4px' }}
+        title={label ?? 'Abrir WhatsApp'}
+      />
+    </a>
+  );
+}
+
 export function OrdersTab() {
   const qc = useQueryClient();
   const [restaurantId, setRestaurantId] = useState('');
@@ -360,7 +388,10 @@ export function OrdersTab() {
       title: 'Cliente', key: 'cliente', width: 160, ellipsis: true,
       render: (_: unknown, o: DeliveryOrder) => (
         <Space direction="vertical" size={0}>
-          <Text>{o.clientName || <Text type="secondary">—</Text>}</Text>
+          <Space size={2}>
+            <Text>{o.clientName || <Text type="secondary">—</Text>}</Text>
+            <WaBtn jid={o.clientPhone} label={`WhatsApp cliente: ${o.clientPhone}`} />
+          </Space>
           {o.clientAddress && <Text type="secondary" style={{ fontSize: 11 }}>{o.clientAddress}</Text>}
         </Space>
       ),
@@ -386,7 +417,15 @@ export function OrdersTab() {
         </Space>
       ),
     },
-    { title: 'Entregador', dataIndex: 'delivererName', key: 'dlv', width: 100, render: (v: string) => v || <Text type="secondary">—</Text> },
+    {
+      title: 'Entregador', key: 'dlv', width: 120,
+      render: (_: unknown, o: DeliveryOrder) => (
+        <Space size={2}>
+          <Text>{o.delivererName || <Text type="secondary">—</Text>}</Text>
+          <WaBtn jid={o.delivererJid} label={`WhatsApp entregador: ${o.delivererName}`} />
+        </Space>
+      ),
+    },
     {
       title: 'Status', dataIndex: 'status', key: 'status', width: 110,
       render: (s: string) => {
@@ -473,27 +512,75 @@ export function OrdersTab() {
         open={!!viewing}
         onCancel={() => setViewing(null)}
         footer={[
+          <Button key="copy" icon={<CopyOutlined />} onClick={() => {
+            if (!viewing) return;
+            const items = Array.isArray(viewing.items) ? viewing.items.join(', ') : (viewing.items ?? '—');
+            const fee = viewing.deliveryFee != null ? `€${Number(viewing.deliveryFee).toFixed(2)}${viewing.distanceKm != null ? ` (${viewing.distanceKm}km)` : ''}` : '—';
+            const txt = [
+              `*Pedido ${viewing.orderRef ?? viewing._id}*`,
+              viewing.externalCode ? `Code: #${viewing.externalCode}` : null,
+              `Restaurante: ${viewing.restaurantName}`,
+              viewing.restaurantAddress ? `Retirada: ${viewing.restaurantAddress}` : null,
+              `Cliente: ${viewing.clientName ?? '—'}`,
+              viewing.clientPhone ? `Tel cliente: ${viewing.clientPhone}` : null,
+              `Entrega: ${viewing.clientAddress ?? '—'}${viewing.clientCommune ? ` — ${viewing.clientCommune}` : ''}`,
+              items !== '—' ? `Itens: ${items}` : null,
+              viewing.value != null ? `Valor: €${Number(viewing.value).toFixed(2)}` : null,
+              `Taxa: ${fee}`,
+              viewing.paymentMethod ? `Pagamento: ${viewing.paymentMethod}` : null,
+              viewing.delivererName ? `Entregador: ${viewing.delivererName}` : null,
+              `Status: ${(ORDER_STATUS[viewing.status] ?? { label: viewing.status }).label}`,
+            ].filter(Boolean).join('\n');
+            navigator.clipboard.writeText(txt).then(() => message.success('Resumo copiado!'));
+          }}>
+            Copiar resumo
+          </Button>,
           <Button key="close" onClick={() => setViewing(null)}>Fechar</Button>,
           viewing && <Button key="edit" type="primary" icon={<EditOutlined />} onClick={() => { openEdit(viewing); setViewing(null); }}>Editar</Button>,
         ]}
-        width={600}
+        width={620}
       >
         {viewing && (
-          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '8px 12px', marginTop: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '8px 12px', marginTop: 12 }}>
             <Text type="secondary">Ref:</Text><Text strong>{viewing.orderRef ?? '—'}</Text>
             {viewing.externalCode && <><Text type="secondary">Código ext.:</Text><Text>#{viewing.externalCode}</Text></>}
-            <Text type="secondary">Restaurante:</Text><Text>{viewing.restaurantName}</Text>
+
+            <Text type="secondary">Restaurante:</Text>
+            <Space size={4}>
+              <Text>{viewing.restaurantName}</Text>
+              {viewing.confirmedByJid && (
+                <WaBtn jid={viewing.confirmedByJid} label={`WhatsApp restaurante (${viewing.confirmedByJid.replace(/@[^@]+$/, '')})`} />
+              )}
+            </Space>
+
+            {viewing.restaurantAddress && (
+              <><Text type="secondary">Retirada:</Text><Text>{viewing.restaurantAddress}</Text></>
+            )}
+
             <Text type="secondary">Cliente:</Text><Text>{viewing.clientName ?? '—'}</Text>
-            <Text type="secondary">Telefone:</Text><Text>{viewing.clientPhone ?? '—'}</Text>
-            <Text type="secondary">Endereço:</Text><Text>{viewing.clientAddress ?? '—'}{viewing.clientCommune ? ` — ${viewing.clientCommune}` : ''}</Text>
+
+            <Text type="secondary">Telefone cliente:</Text>
+            <Space size={4}>
+              <Text>{viewing.clientPhone ?? '—'}</Text>
+              <WaBtn jid={viewing.clientPhone} label={`WhatsApp cliente: ${viewing.clientPhone}`} />
+            </Space>
+
+            <Text type="secondary">Endereço entrega:</Text>
+            <Text>{viewing.clientAddress ?? '—'}{viewing.clientCommune ? ` — ${viewing.clientCommune}` : ''}</Text>
+
             <Text type="secondary">Itens:</Text>
             <Text>{Array.isArray(viewing.items) ? viewing.items.join(', ') : (viewing.items ?? '—')}</Text>
             <Text type="secondary">Valor pedido:</Text><Text strong>{eur(viewing.value)}</Text>
             <Text type="secondary">Taxa entrega:</Text>
             <Text>{eur(viewing.deliveryFee)}{viewing.distanceKm != null ? ` (${viewing.distanceKm} km)` : ''}</Text>
             <Text type="secondary">Pagamento:</Text><Text>{viewing.paymentMethod ?? '—'}</Text>
-            <Text type="secondary">Entregador:</Text><Text>{viewing.delivererName ?? '—'}</Text>
-            <Text type="secondary">JID entregador:</Text><Text code style={{ fontSize: 11 }}>{viewing.delivererJid ?? '—'}</Text>
+
+            <Text type="secondary">Entregador:</Text>
+            <Space size={4}>
+              <Text>{viewing.delivererName ?? '—'}</Text>
+              <WaBtn jid={viewing.delivererJid} label={`WhatsApp entregador: ${viewing.delivererName}`} />
+            </Space>
+
             <Text type="secondary">Status:</Text>
             <span><Tag color={(ORDER_STATUS[viewing.status] ?? { color: 'default' }).color}>{(ORDER_STATUS[viewing.status] ?? { label: viewing.status }).label}</Tag></span>
             <Text type="secondary">Acerto:</Text><Text>{viewing.settlement ?? 'pendente'}</Text>
