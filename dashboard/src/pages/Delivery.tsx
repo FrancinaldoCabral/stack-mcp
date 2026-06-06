@@ -383,7 +383,15 @@ export function OrdersTab() {
       title: 'Data', dataIndex: 'createdAt', key: 'date', width: 90,
       render: (d: string) => d ? dayjs(d).format('DD/MM HH:mm') : '—',
     },
-    { title: 'Restaurante', dataIndex: 'restaurantName', key: 'rst', width: 120, ellipsis: true },
+    {
+      title: 'Restaurante', key: 'rst', width: 130, ellipsis: true,
+      render: (_: unknown, o: DeliveryOrder) => (
+        <Space size={2}>
+          <Text>{o.restaurantName}</Text>
+          <WaBtn jid={o.confirmedByJid} label={`WhatsApp contato restaurante: ${o.confirmedByJid ?? ''}`} />
+        </Space>
+      ),
+    },
     {
       title: 'Cliente', key: 'cliente', width: 160, ellipsis: true,
       render: (_: unknown, o: DeliveryOrder) => (
@@ -546,16 +554,20 @@ export function OrdersTab() {
             {viewing.externalCode && <><Text type="secondary">Código ext.:</Text><Text>#{viewing.externalCode}</Text></>}
 
             <Text type="secondary">Restaurante:</Text>
-            <Space size={4}>
-              <Text>{viewing.restaurantName}</Text>
-              {viewing.confirmedByJid && (
-                <WaBtn jid={viewing.confirmedByJid} label={`WhatsApp restaurante (${viewing.confirmedByJid.replace(/@[^@]+$/, '')})`} />
-              )}
-            </Space>
+            <Text>{viewing.restaurantName}</Text>
 
             {viewing.restaurantAddress && (
               <><Text type="secondary">Retirada:</Text><Text>{viewing.restaurantAddress}</Text></>
             )}
+
+            <Text type="secondary">Contato restaurante:</Text>
+            <Space size={4}>
+              {viewing.confirmedByJid
+                ? <><Text code style={{ fontSize: 11 }}>{viewing.confirmedByJid.replace(/@[^@]+$/, '')}</Text>
+                    <WaBtn jid={viewing.confirmedByJid} label="WhatsApp contato restaurante" /></>
+                : <Text type="secondary">—</Text>
+              }
+            </Space>
 
             <Text type="secondary">Cliente:</Text><Text>{viewing.clientName ?? '—'}</Text>
 

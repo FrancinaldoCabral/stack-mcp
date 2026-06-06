@@ -599,8 +599,14 @@ export async function handleDeliveryTool(name, args) {
                 await db.collection('delivery_orders').updateOne({ _id: order._id }, { $set: { restaurantAddress, updatedAt: new Date() } });
                 order.restaurantAddress = restaurantAddress;
             }
-            const confirmedByJid = args.confirmedByJid ? String(args.confirmedByJid) : null;
-            const confirmedPhone = confirmedByJid ? confirmedByJid.replace(/@[^@]+$/, '') : null;
+            const confirmedByJidRaw = args.confirmedByJid ? String(args.confirmedByJid) : null;
+            // Garante formato JID completo para mention nativa do WhatsApp
+            const confirmedByJid = confirmedByJidRaw
+                ? (confirmedByJidRaw.includes('@')
+                    ? confirmedByJidRaw
+                    : `${confirmedByJidRaw.replace(/\D/g, '')}@s.whatsapp.net`)
+                : null;
+            const confirmedPhone = confirmedByJid ? confirmedByJid.replace(/@[^@]+$/, '').replace(/\D/g, '') : null;
             // Salva confirmedByJid no pedido
             if (confirmedByJid) {
                 await db.collection('delivery_orders').updateOne({ _id: order._id }, { $set: { confirmedByJid, updatedAt: new Date() } });

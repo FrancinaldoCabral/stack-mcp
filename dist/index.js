@@ -312,6 +312,32 @@ async function main() {
                 clearTimeout(t2);
             }
         });
+        // Cache de telefone do bot por instância Evolution (evita lookup repetido por mensagem)
+        const agentPhoneCache = new Map();
+        async function getAgentPhone(instance) {
+            if (agentPhoneCache.has(instance))
+                return agentPhoneCache.get(instance);
+            try {
+                const evoUrl = process.env.EVOLUTION_URL ?? '';
+                const evoKey = process.env.EVOLUTION_API_KEY ?? '';
+                if (!evoUrl || !evoKey)
+                    return null;
+                const r = await fetch(`${evoUrl}/instance/fetchInstances`, {
+                    headers: { apikey: evoKey, 'Content-Type': 'application/json' },
+                });
+                if (!r.ok)
+                    return null;
+                const data = await r.json();
+                const inst = data.find(d => d.instance?.instanceName === instance);
+                const phone = inst?.instance?.owner?.replace(/@[^@]+$/, '').replace(/\D/g, '') ?? null;
+                if (phone)
+                    agentPhoneCache.set(instance, phone);
+                return phone;
+            }
+            catch {
+                return null;
+            }
+        }
         // Agentic loop — executa LLM + tool calls em loop até resposta final (sem limite de rounds).
         // Substitui a cadeia manual de rounds hardcoded no n8n.
         // Recebe { openRouterBody, businessId, instance } do n8n via HTTP Request node.
@@ -343,8 +369,9 @@ async function main() {
             let finalContent = null;
             let toolCallsMade = false;
             const ctxLog = [];
-            // Auto-inject: contexto de pedidos para grupo de entregadores
+            // Grupo de entregadores: filtro mecânico + inject de contexto de pedidos
             if (vendlyCtx?.personaKey === 'deliverer') {
+                let hasOrderReply = false;
                 try {
                     const ctxArgs = {
                         restaurantId: vendlyCtx.restaurantId ?? '', // vazio = todos os restaurantes
@@ -356,6 +383,7 @@ async function main() {
                         ctxArgs.waExternalId = vendlyCtx.waExternalId;
                     const ctxText = await routeTool('delivery_deliverer_context', ctxArgs);
                     const parsed = JSON.parse(ctxText);
+                    hasOrderReply = (parsed.activeOrdersCtx ?? '').includes('## PEDIDO DESTA MENSAGEM');
                     if (parsed.ok && parsed.activeOrdersCtx) {
                         const msgs = Array.isArray(currentBody.messages)
                             ? currentBody.messages
@@ -363,12 +391,33 @@ async function main() {
                         const sysMsg = msgs.find((m) => m.role === 'system');
                         if (sysMsg && typeof sysMsg.content === 'string') {
                             sysMsg.content += parsed.activeOrdersCtx;
-                            console.log(`[agent-loop] deliverer-ctx injected waExtId=${vendlyCtx.waExternalId ?? 'none'}`);
+                            console.log(`[agent-loop] deliverer-ctx injected waExtId=${vendlyCtx.waExternalId ?? 'none'} hasOrderReply=${hasOrderReply}`);
                         }
                     }
                 }
                 catch (e) {
                     console.error('[agent-loop] deliverer-ctx auto-inject failed:', String(e));
+                    // Em caso de erro no lookup, deixa passar para o LLM (fail-open)
+                    hasOrderReply = true;
+                }
+                // Filtro mecânico: só chama LLM se for reply a pedido OU @menção ao agente.
+                // Grupo de entregadores é informal — sem filtro cada mensagem custaria LLM.
+                if (!hasOrderReply) {
+                    const agentPhone = vendlyCtx.instance ? await getAgentPhone(String(vendlyCtx.instance)) : null;
+                    const msgs = Array.isArray(currentBody.messages)
+                        ? currentBody.messages
+                        : [];
+                    const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
+                    const msgText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+                    // @menção do agente: @<phone_digits> no texto da mensagem
+                    const hasMentionOfAgent = agentPhone
+                        ? msgText.includes(`@${agentPhone}`)
+                        : /@\d{7,}/.test(msgText); // fallback se phone não disponível
+                    if (!hasMentionOfAgent) {
+                        console.log(`[agent-loop] deliverer pre-filter SKIP: no order reply, no agent mention (instance=${vendlyCtx.instance ?? 'none'})`);
+                        res.json({ choices: [{ message: { content: '[SKIP]' }, finish_reason: 'stop' }], tool_calls_made: false });
+                        return;
+                    }
                 }
             }
             for (let iter = 0; iter < MAX_ITER; iter++) {
@@ -496,12 +545,22 @@ async function main() {
                         }
                     }
                     else {
+                        // Auto-inject confirmedByJid para delivery_confirm_order chamado pela persona restaurant
+                        if (toolName === 'delivery_confirm_order'
+                            && vendlyCtx?.personaKey === 'restaurant'
+                            && vendlyCtx.senderPhone
+                            && !args.confirmedByJid) {
+                            args.confirmedByJid = vendlyCtx.senderPhone;
+                        }
                         try {
                             const text = await routeTool(toolName, args);
                             try {
                                 const p = JSON.parse(text);
                                 content = p.ok === true
-                                    ? (typeof p.result === 'string' ? p.result : (JSON.stringify(p.result) ?? String(p.result ?? '')))
+                                    // Se existe campo result usa ele; se não, devolve o JSON completo ao LLM
+                                    ? (p.result !== undefined
+                                        ? (typeof p.result === 'string' ? p.result : JSON.stringify(p.result))
+                                        : text)
                                     : p.ok === false
                                         ? 'Erro ferramenta: ' + String(p.error ?? JSON.stringify(p))
                                         : text;

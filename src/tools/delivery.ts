@@ -63,7 +63,7 @@ async function sendToJid(
 ): Promise<unknown> {
   const http = evolution();
   const body: Record<string, unknown> = { number: jid, text, delay: 500 };
-  if (mentionedList?.length) body.mentionedList = mentionedList;
+  if (mentionedList?.length) body.mentioned = mentionedList;
   if (mentionsEveryOne) body.mentionsEveryOne = true;
   if (quotedMessageId) body.quoted = { key: { id: quotedMessageId } };
   return safeRequest(() =>
@@ -634,8 +634,14 @@ export async function handleDeliveryTool(
         order.restaurantAddress = restaurantAddress;
       }
 
-      const confirmedByJid = args.confirmedByJid ? String(args.confirmedByJid) : null;
-      const confirmedPhone = confirmedByJid ? confirmedByJid.replace(/@[^@]+$/, '') : null;
+      const confirmedByJidRaw = args.confirmedByJid ? String(args.confirmedByJid) : null;
+      // Garante formato JID completo para mention nativa do WhatsApp
+      const confirmedByJid = confirmedByJidRaw
+        ? (confirmedByJidRaw.includes('@')
+            ? confirmedByJidRaw
+            : `${confirmedByJidRaw.replace(/\D/g, '')}@s.whatsapp.net`)
+        : null;
+      const confirmedPhone = confirmedByJid ? confirmedByJid.replace(/@[^@]+$/, '').replace(/\D/g, '') : null;
 
       // Salva confirmedByJid no pedido
       if (confirmedByJid) {

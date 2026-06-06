@@ -424,7 +424,7 @@ export async function handleEvolutionTool(name: string, args: Args): Promise<str
         text,
         delay: delay ?? 0,
       };
-      if (Array.isArray(mentionedList) && mentionedList.length) payload.mentionedList = mentionedList;
+      if (Array.isArray(mentionedList) && mentionedList.length) payload.mentioned = mentionedList;
       if (mentionsEveryOne) payload.mentionsEveryOne = true;
       if (quoted) payload.quoted = quoted;
       const res = await safeRequest(() =>
