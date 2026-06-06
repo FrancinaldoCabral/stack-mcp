@@ -118,6 +118,8 @@ async function main() {
 
   process.on('SIGINT', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
   process.on('SIGTERM', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
+  process.on('uncaughtException', (err) => { console.error('[crash] uncaughtException:', err); });
+  process.on('unhandledRejection', (reason) => { console.error('[crash] unhandledRejection:', reason); });
 
   if (port) {
     // ── Modo HTTP: nova instância de server+transport por request (stateless) ─
