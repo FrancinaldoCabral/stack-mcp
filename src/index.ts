@@ -304,7 +304,7 @@ async function main() {
       const businessId = String(payload.businessId ?? payload.instance ?? '');
       const instance = String(payload.instance ?? '');
 
-      const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL ?? 'google/gemini-2.5-flash';
+      const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL ?? 'google/gemini-3.1-flash-lite';
       let modelInUse = String((currentBody as Record<string,unknown>).model ?? 'unknown');
       const originalBody = { ...currentBody };
       let finalContent: string | null = null;
