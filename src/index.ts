@@ -439,7 +439,7 @@ async function main() {
               try {
                 const p = JSON.parse(text) as { ok?: boolean; result?: unknown; error?: unknown };
                 content = p.ok === true
-                  ? (typeof p.result === 'string' ? p.result : JSON.stringify(p.result))
+                  ? (typeof p.result === 'string' ? p.result : (JSON.stringify(p.result) ?? String(p.result ?? '')))
                   : p.ok === false
                     ? 'Erro ferramenta: ' + String(p.error ?? JSON.stringify(p))
                     : text;
