@@ -294,9 +294,9 @@ async function main() {
           headers: { apikey: evoKey, 'Content-Type': 'application/json' },
         });
         if (!r.ok) return null;
-        const data = await r.json() as Array<{ instance?: { instanceName?: string; owner?: string } }>;
-        const inst = data.find(d => d.instance?.instanceName === instance);
-        const phone = inst?.instance?.owner?.replace(/@[^@]+$/, '').replace(/\D/g, '') ?? null;
+        const data = await r.json() as Array<{ name?: string; ownerJid?: string; number?: string }>;
+        const inst = data.find(d => d.name === instance);
+        const phone = (inst?.ownerJid ?? inst?.number ?? '').replace(/@[^@]+$/, '').replace(/\D/g, '') || null;
         if (phone) agentPhoneCache.set(instance, phone);
         return phone;
       } catch { return null; }
@@ -346,6 +346,22 @@ async function main() {
 
       // Grupo de entregadores: filtro mecânico + inject de contexto de pedidos
       if (vendlyCtx?.personaKey === 'deliverer') {
+        const dMsgs = Array.isArray(currentBody.messages)
+          ? (currentBody.messages as Array<Record<string, unknown>>)
+          : [];
+        const lastUserMsg = [...dMsgs].reverse().find((m) => m.role === 'user');
+        const msgText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+
+        // Pré-filtro sem custo: sem waExternalId (não é reply) e sem @mention no texto → SKIP imediato
+        const hasReplyContext = !!vendlyCtx.waExternalId;
+        const hasPotentialMention = /@\d{7,}/.test(msgText);
+        if (!hasReplyContext && !hasPotentialMention) {
+          console.log(`[agent-loop] deliverer pre-filter SKIP (fast): no reply, no @mention`);
+          res.json({ choices: [{ message: { content: '[SKIP]' }, finish_reason: 'stop' }], tool_calls_made: false });
+          return;
+        }
+
+        // DB lookup — só chega aqui se há reply ou @mention potencial
         let hasOrderReply = false;
         try {
           const ctxArgs: Record<string, unknown> = {
@@ -358,10 +374,7 @@ async function main() {
           const parsed = JSON.parse(ctxText) as { ok?: boolean; activeOrdersCtx?: string };
           hasOrderReply = (parsed.activeOrdersCtx ?? '').includes('## PEDIDO DESTA MENSAGEM');
           if (parsed.ok && parsed.activeOrdersCtx) {
-            const msgs = Array.isArray(currentBody.messages)
-              ? (currentBody.messages as Array<Record<string, unknown>>)
-              : [];
-            const sysMsg = msgs.find((m) => m.role === 'system');
+            const sysMsg = dMsgs.find((m) => m.role === 'system');
             if (sysMsg && typeof sysMsg.content === 'string') {
               sysMsg.content += parsed.activeOrdersCtx;
               console.log(`[agent-loop] deliverer-ctx injected waExtId=${vendlyCtx.waExternalId ?? 'none'} hasOrderReply=${hasOrderReply}`);
@@ -377,19 +390,25 @@ async function main() {
         // Grupo de entregadores é informal — sem filtro cada mensagem custaria LLM.
         if (!hasOrderReply) {
           const agentPhone = vendlyCtx.instance ? await getAgentPhone(String(vendlyCtx.instance)) : null;
-          const msgs = Array.isArray(currentBody.messages)
-            ? (currentBody.messages as Array<Record<string, unknown>>)
-            : [];
-          const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
-          const msgText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
-          // @menção do agente: @<phone_digits> no texto da mensagem.
-          // Fail-closed: sem agentPhone, não processa — evita loop quando msg do bot
-          // (com @entregadorPhone) voltar via Evolution sync como incoming no Chatwoot.
-          const hasMentionOfAgent = agentPhone
-            ? msgText.includes(`@${agentPhone}`)
+          const senderPhone = String(vendlyCtx.senderPhone ?? '').replace(/\D/g, '');
+          const mentions = [...msgText.matchAll(/@(\d{7,})/g)].map(m => m[1]);
+
+          // Camada 1: agentPhone resolvido e presente nas menções (match exato ou sufixo)
+          const mentionedAgent = agentPhone
+            ? mentions.some(p => p === agentPhone || agentPhone.endsWith(p) || p.endsWith(agentPhone))
             : false;
+
+          // Camada 2: qualquer @menção que NÃO seja do próprio remetente
+          const mentionedNonSender = senderPhone.length > 0
+            ? mentions.some(p => p !== senderPhone && !senderPhone.endsWith(p) && !p.endsWith(senderPhone))
+            : false;
+
+          // Camada 3: remetente desconhecido, qualquer @menção passa
+          const mentionedAnyone = !senderPhone && mentions.length > 0;
+
+          const hasMentionOfAgent = mentionedAgent || mentionedNonSender || mentionedAnyone;
           if (!hasMentionOfAgent) {
-            console.log(`[agent-loop] deliverer pre-filter SKIP: no order reply, no agent mention (instance=${vendlyCtx.instance ?? 'none'} agentPhone=${agentPhone ?? 'unknown'})`);
+            console.log(`[agent-loop] deliverer pre-filter SKIP: no order reply, no agent mention (instance=${vendlyCtx.instance ?? 'none'} agentPhone=${agentPhone ?? 'unknown'} senderPhone=${senderPhone || 'unknown'} mentions=${mentions.join(',') || 'none'})`);
             res.json({ choices: [{ message: { content: '[SKIP]' }, finish_reason: 'stop' }], tool_calls_made: false });
             return;
           }

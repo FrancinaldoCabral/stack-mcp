@@ -410,7 +410,7 @@ export async function handleEvolutionTool(name, args) {
                 delay: delay ?? 0,
             };
             if (Array.isArray(mentionedList) && mentionedList.length)
-                payload.mentionedList = mentionedList;
+                payload.mentioned = mentionedList;
             if (mentionsEveryOne)
                 payload.mentionsEveryOne = true;
             if (quoted)
