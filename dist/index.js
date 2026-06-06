@@ -108,6 +108,8 @@ async function main() {
     const port = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
     process.on('SIGINT', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
     process.on('SIGTERM', async () => { await closeMongo(); await closeRedis(); process.exit(0); });
+    process.on('uncaughtException', (err) => { console.error('[crash] uncaughtException:', err); });
+    process.on('unhandledRejection', (reason) => { console.error('[crash] unhandledRejection:', reason); });
     if (port) {
         // ── Modo HTTP: nova instância de server+transport por request (stateless) ─
         // ── Express app for dashboard + REST API ─────────────────────────────
@@ -331,12 +333,40 @@ async function main() {
             }
             const businessId = String(payload.businessId ?? payload.instance ?? '');
             const instance = String(payload.instance ?? '');
-            const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL ?? 'google/gemini-2.5-flash-preview-05-20';
+            // Extrair _vendlyCtx antes de enviar ao OpenRouter (campo desconhecido seria rejeitado)
+            const vendlyCtx = currentBody._vendlyCtx;
+            if (vendlyCtx)
+                delete currentBody._vendlyCtx;
+            const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL ?? 'google/gemini-3.1-flash-lite';
             let modelInUse = String(currentBody.model ?? 'unknown');
             const originalBody = { ...currentBody };
             let finalContent = null;
             let toolCallsMade = false;
             const ctxLog = [];
+            // Auto-inject: contexto de pedidos para grupo de entregadores
+            if (vendlyCtx?.personaKey === 'deliverer' && vendlyCtx?.restaurantId) {
+                try {
+                    const ctxText = await routeTool('delivery_deliverer_context', {
+                        restaurantId: vendlyCtx.restaurantId,
+                        senderPhone: vendlyCtx.senderPhone ?? '',
+                        ...(vendlyCtx.replyToExternalId ? { replyToExternalId: vendlyCtx.replyToExternalId } : {}),
+                    });
+                    const parsed = JSON.parse(ctxText);
+                    if (parsed.ok && parsed.activeOrdersCtx) {
+                        const msgs = Array.isArray(currentBody.messages)
+                            ? currentBody.messages
+                            : [];
+                        const sysMsg = msgs.find((m) => m.role === 'system');
+                        if (sysMsg && typeof sysMsg.content === 'string') {
+                            sysMsg.content += parsed.activeOrdersCtx;
+                            console.log(`[agent-loop] deliverer-ctx injected reply=${vendlyCtx.replyToExternalId ?? 'none'}`);
+                        }
+                    }
+                }
+                catch (e) {
+                    console.error('[agent-loop] deliverer-ctx auto-inject failed:', String(e));
+                }
+            }
             for (let iter = 0; iter < MAX_ITER; iter++) {
                 const msgs = Array.isArray(currentBody.messages) ? currentBody.messages : [];
                 const ctxChars = JSON.stringify(msgs).length;
@@ -467,7 +497,7 @@ async function main() {
                             try {
                                 const p = JSON.parse(text);
                                 content = p.ok === true
-                                    ? (typeof p.result === 'string' ? p.result : JSON.stringify(p.result))
+                                    ? (typeof p.result === 'string' ? p.result : (JSON.stringify(p.result) ?? String(p.result ?? '')))
                                     : p.ok === false
                                         ? 'Erro ferramenta: ' + String(p.error ?? JSON.stringify(p))
                                         : text;
