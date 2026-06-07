@@ -220,7 +220,7 @@ export const deliveryTools: Tool[] = [
       required: ['orderId', 'status'],
       properties: {
         orderId: { type: 'string' },
-        status: { type: 'string', enum: ['rascunho', 'em_espera', 'pendente', 'aceito', 'a_caminho', 'entregue', 'cancelado'] },
+        status: { type: 'string', enum: ['rascunho', 'em_espera', 'pendente', 'a_caminho', 'entregue', 'cancelado'], description: 'Status "aceito" não disponível aqui — use delivery_assign_deliverer para atribuir entregador.' },
         note: { type: 'string', description: 'Observação a anexar e enviar ao grupo de comandos' },
         notifyCommandGroup: { type: 'boolean', description: 'Postar no grupo de comandos (default true)' },
       },
@@ -686,6 +686,10 @@ export async function handleDeliveryTool(
         ? { _id: new ObjectId(rawStatusId) }
         : { orderRef: rawStatusId };
       const status = String(args.status);
+      // 'aceito' só pode ser definido via delivery_assign_deliverer (requer entregador)
+      if (status === 'aceito') {
+        return json({ error: 'Status "aceito" não pode ser definido aqui. Use delivery_assign_deliverer para atribuir um entregador ao pedido.' });
+      }
       const note = args.note ? String(args.note) : '';
       const order = await db.collection('delivery_orders').findOneAndUpdate(
         statusOrderFilter,
